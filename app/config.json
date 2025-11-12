@@ -1,7 +1,7 @@
 {
   "domains": [
-    "google.com",
-    "openai.com"
+    { "url": "google.com" },
+    { "url": "openai.com" }
   ],
   "notify_before_days": 15
 }
