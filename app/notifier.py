@@ -1,12 +1,15 @@
 import smtplib
 from email.mime.text import MIMEText
 import json
+import os
+import datetime
+
+LAST_SENT_FILE = "/tmp/ssl_monitor_last_sent.txt"  # file per gestire invio giornaliero
 
 def notify(results, config_path="app/config.json"):
     with open(config_path) as f:
         conf = json.load(f)
 
-    # sezione email
     email_conf = conf.get("email", {})
     if not email_conf.get("enabled", False):
         print("ℹ️  Email notifications are disabled.")
@@ -23,14 +26,51 @@ def notify(results, config_path="app/config.json"):
         print("✅ Nessun certificato in scadenza.")
         return
 
-    # costruisci messaggio email
-    subject = "⚠️ Avviso scadenza certificati SSL"
-    body = "I seguenti certificati stanno per scadere:\n\n"
-    for r in alerts:
-        body += f"- {r['domain']} scade tra {r['days_left']} giorni ({r['expires']})\n"
+    # 📅 Controlla se è già stata inviata oggi
+    today = datetime.date.today().isoformat()
+    if os.path.exists(LAST_SENT_FILE):
+        with open(LAST_SENT_FILE) as f:
+            last_sent = f.read().strip()
+        if last_sent == today:
+            print("📧 Email già inviata oggi, salto l'invio.")
+            return
 
-    msg = MIMEText(body)
-    msg["Subject"] = subject
+    # 💄 Crea corpo HTML
+    html_body = """
+    <html>
+    <head>
+    <style>
+        body { font-family: Arial, sans-serif; }
+        h2 { color: #d9534f; }
+        table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        tr:nth-child(even){background-color: #f9f9f9;}
+        .danger { color: red; font-weight: bold; }
+        .ok { color: green; }
+    </style>
+    </head>
+    <body>
+        <h2>⚠️ Avviso scadenza certificati SSL</h2>
+        <p>I seguenti certificati stanno per scadere:</p>
+        <table>
+            <tr><th>Dominio</th><th>Data Scadenza</th><th>Giorni Rimasti</th></tr>
+    """
+
+    for r in alerts:
+        clean_domain = r['domain'].replace("https://", "").replace("http://", "")
+        color_class = "danger" if r["days_left"] <= 15 else "ok"
+        html_body += f"<tr><td>{clean_domain}</td><td>{r['expires']}</td><td class='{color_class}'>{r['days_left']}</td></tr>"
+
+    html_body += """
+        </table>
+        <p style="margin-top:20px;">Email generata automaticamente da <b>SSL Monitor</b>.</p>
+    </body>
+    </html>
+    """
+
+    msg = MIMEText(html_body, "html")
+    msg["Subject"] = "⚠️ Avviso scadenza certificati SSL"
     msg["From"] = sender
     msg["To"] = ", ".join(recipients)
 
@@ -39,6 +79,8 @@ def notify(results, config_path="app/config.json"):
             if use_tls:
                 server.starttls()
             server.sendmail(sender, recipients, msg.as_string())
-        print("✅ Email di avviso inviata con successo!")
+        with open(LAST_SENT_FILE, "w") as f:
+            f.write(today)
+        print("✅ Email HTML inviata con successo!")
     except Exception as e:
         print(f"❌ Errore nell'invio dell'email: {e}")
