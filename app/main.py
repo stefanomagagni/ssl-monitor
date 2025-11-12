@@ -9,12 +9,98 @@ app = FastAPI()
 def dashboard():
     results = check_domains()
     notify(results)
-    html = "<h1>SSL Monitor</h1><table border=1><tr><th>Domain</th><th>Expires</th><th>Days Left</th></tr>"
+
+    html = """
+    <html>
+    <head>
+        <title>SSL Monitor</title>
+        <style>
+            body {
+                background-image: url('https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=1400&q=80');
+                background-size: cover;
+                background-position: center;
+                background-attachment: fixed;
+                color: white;
+                font-family: Arial, sans-serif;
+                margin: 0;
+                padding: 0;
+                text-align: center;
+            }
+            header {
+                background-color: rgba(0, 0, 0, 0.6);
+                padding: 20px;
+            }
+            header img {
+                max-height: 80px;
+            }
+            h1 {
+                margin-top: 10px;
+                font-size: 2.5em;
+            }
+            table {
+                width: 80%;
+                margin: 30px auto;
+                border-collapse: collapse;
+                background-color: rgba(0, 0, 0, 0.7);
+                border-radius: 10px;
+                overflow: hidden;
+                box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+            }
+            th, td {
+                padding: 15px;
+                text-align: center;
+            }
+            th {
+                background-color: rgba(255, 255, 255, 0.2);
+                font-size: 1.1em;
+            }
+            tr:nth-child(even) {
+                background-color: rgba(255, 255, 255, 0.1);
+            }
+            tr:hover {
+                background-color: rgba(255, 255, 255, 0.2);
+            }
+            .error {
+                color: #ff8080;
+                font-weight: bold;
+            }
+            footer {
+                background-color: rgba(0, 0, 0, 0.6);
+                padding: 10px;
+                position: fixed;
+                bottom: 0;
+                width: 100%;
+                color: #ccc;
+                font-size: 0.9em;
+            }
+        </style>
+    </head>
+    <body>
+        <header>
+            <img src="https://raw.githubusercontent.com/stefanomagagni/ssl-monitor/main/app/logo_deda.png" alt="Deda Next Logo">
+            <h1>SSL Monitor</h1>
+        </header>
+
+        <table border="1">
+            <tr><th>Domain</th><th>Expires</th><th>Days Left</th></tr>
+    """
+
+    # Aggiunge le righe della tabella dinamicamente
     for r in results:
         if "error" in r:
-            html += f"<tr><td>{r['domain']}</td><td colspan=2 style='color:red;'>Errore: {r['error']}</td></tr>"
+            html += f"<tr><td>{r['domain']}</td><td colspan=2 class='error'>Errore: {r['error']}</td></tr>"
         else:
-            color = "red" if r["alert"] else "green"
+            color = "red" if r["alert"] else "lightgreen"
             html += f"<tr><td>{r['domain']}</td><td>{r['expires']}</td><td style='color:{color}'>{r['days_left']}</td></tr>"
-    html += "</table>"
+
+    html += """
+        </table>
+        <footer>
+            © 2025 Deda Next – Internal SSL Monitoring Dashboard
+        </footer>
+    </body>
+    </html>
+    """
+
     return html
+
