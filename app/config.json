@@ -1,7 +1,6 @@
 {
   "domains": [
-    { "url": "https://easyredmine.dedagroup.it" },
-    { "url": "openai.com" }
-  ],
-  "notify_before_days": 15
+    { "url": "https://easyredmine.dedagroup.it", "alert_days": 15 },
+    { "url": "openai.com", "alert_days": 15 }
+  ]
 }
