@@ -10,7 +10,7 @@ def get_cert_expiry(domain):
     return exp
 
 def check_domains(config_path="app/config.json"):
-    with open(config_path) as f:
+    with open("config.json") as f:
         conf = json.load(f)
     results = []
     now = datetime.datetime.utcnow()
