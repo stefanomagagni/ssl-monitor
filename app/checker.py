@@ -1,52 +1,100 @@
-import ssl, socket, json
+import ssl
+import socket
+import OpenSSL
+import json
 from datetime import datetime
+from urllib.parse import urlparse
 
-def get_cert_expiry(host, port=443):
+def load_config(path="app/config.json"):
+    with open(path) as f:
+        return json.load(f)
+
+def get_certificate(host, port):
     ctx = ssl.create_default_context()
-    with socket.create_connection((host, port), timeout=5) as sock:
-        with ctx.wrap_socket(sock, server_hostname=host) as ssock:
-            cert = ssock.getpeercert()
 
-    expires = datetime.strptime(cert['notAfter'], "%b %d %H:%M:%S %Y %Z")
-    issuer = " ".join(v[0][1] for v in cert['issuer'])
-    san = [x[1] for x in cert.get('subjectAltName', [])]
+    # NON verifichiamo il certificato → estraiamo sempre i dati
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
 
-    return expires.date(), issuer, san
+    conn = ctx.wrap_socket(
+        socket.socket(socket.AF_INET),
+        server_hostname=host
+    )
+    conn.settimeout(5)
+    conn.connect((host, port))
+
+    # Estrae cert grezzo
+    der_cert = conn.getpeercert(True)
+    conn.close()
+
+    x509 = OpenSSL.crypto.load_certificate(OpenSSL.crypto.FILETYPE_ASN1, der_cert)
+
+    # Controllo chain → se verify fallisce = chain incompleta
+    chain_incomplete = False
+    try:
+        ssl.get_server_certificate((host, port))
+    except Exception:
+        chain_incomplete = True
+
+    return x509, chain_incomplete
+
+
+def parse_cert(x509):
+    # Expiration
+    expires_str = x509.get_notAfter().decode("utf-8")
+    expires_dt = datetime.strptime(expires_str, "%Y%m%d%H%M%SZ")
+
+    # Issuer
+    issuer = ", ".join([f"{name.decode()}={value.decode()}" for name, value in x509.get_issuer().get_components()])
+
+    # SAN
+    san = []
+    ext_count = x509.get_extension_count()
+    for i in range(ext_count):
+        ext = x509.get_extension(i)
+        if ext.get_short_name() == b"subjectAltName":
+            san = ext.__str__().split(", ")
+
+    return expires_dt, issuer, san
 
 
 def check_domains(config_path="app/config.json"):
-    with open(config_path) as f:
-        conf = json.load(f)
-
+    config = load_config(config_path)
     results = []
 
-    for d in conf["domains"]:
-        url = d["url"]
-        port = d.get("port", 443)
-        service = d.get("service_name", "-")
-        alert_days = d.get("alert_days", 15)
+    for entry in config["domains"]:
+        url = entry["url"]
+        alert_days = entry.get("alert_days", 30)
+        service = entry.get("service", None)
+
+        parsed = urlparse(url)
+        host = parsed.hostname
+        port = parsed.port if parsed.port else (443 if parsed.scheme == "https" else 80)
 
         try:
-            expires, issuer, san = get_cert_expiry(url, port)
-            days_left = (expires - datetime.now().date()).days
-            alert = days_left < alert_days
+            cert, chain_incomplete = get_certificate(host, port)
+            expires, issuer, san = parse_cert(cert)
+
+            days_left = (expires - datetime.utcnow()).days
+            alert = days_left <= alert_days
 
             results.append({
-                "domain": url,
-                "port": port,
                 "service": service,
-                "expires": str(expires),
+                "domain": host,
+                "port": port,
+                "expires": expires.strftime("%Y-%m-%d"),
                 "days_left": days_left,
                 "issuer": issuer,
                 "san": san,
-                "alert": alert
+                "alert": alert,
+                "chain_incomplete": chain_incomplete
             })
 
         except Exception as e:
             results.append({
-                "domain": url,
-                "port": port,
                 "service": service,
+                "domain": host,
+                "port": port,
                 "error": str(e)
             })
 
