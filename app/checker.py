@@ -19,31 +19,27 @@ def fetch_certificate(host, port):
     except Exception as e:
         return f"Connection error: {e}"
 
+
 def parse_certificate(cert):
     """Extract fields even if chain is incomplete."""
     try:
-        # Expiration date
         expires = datetime.strptime(cert.get_notAfter().decode(), "%Y%m%d%H%M%SZ")
         days_left = (expires - datetime.utcnow()).days
 
-        # Issuer
         issuer_parts = dict(cert.get_issuer().get_components())
         issuer = ", ".join([
             issuer_parts.get(b"O", b"").decode(),
             issuer_parts.get(b"CN", b"").decode()
         ]).strip(", ")
 
-        # SAN (Subject Alternative Names)
+        # SAN
         san_list = []
-        ext_count = cert.get_extension_count()
-
-        for i in range(ext_count):
+        for i in range(cert.get_extension_count()):
             ext = cert.get_extension(i)
             if ext.get_short_name() == b"subjectAltName":
                 san_list = [entry.strip() for entry in str(ext).split(",")]
                 break
 
-        # Certificate Chain → not available here, we mark it as "unknown"
         chain_status = "⚠️ Incomplete or not provided by server"
 
         return {
@@ -51,11 +47,13 @@ def parse_certificate(cert):
             "days_left": days_left,
             "issuer": issuer if issuer else "Unknown",
             "san": san_list,
-            "chain": chain_status
+            "chain": chain_status,
+            "chain_incomplete": True   # <── aggiunta fondamentale
         }
 
     except Exception as e:
-        return {"error": f"Parsing error: {e}"}
+        return {"error": f"Parsing error: {e}", "chain_incomplete": True}
+
 
 def check_domains(config_path="app/config.json"):
     import json
@@ -74,25 +72,22 @@ def check_domains(config_path="app/config.json"):
         cert = fetch_certificate(host, port)
 
         if isinstance(cert, str):
-            # Error message
             results.append({
                 "service": service,
                 "domain": host,
                 "port": port,
-                "error": cert
+                "error": cert,
+                "chain_incomplete": True   # <── serve SEMPRE
             })
             continue
 
         parsed = parse_certificate(cert)
 
         if "error" in parsed:
-            results.append({
-                "service": service,
-                "domain": host,
-                "port": port,
-                "error": parsed["error"]
-            })
-            continue
+            parsed["service"] = service
+            parsed["domain"] = host
+            parsed["port"] = port
+            return parsed
 
         results.append({
             "service": service,
@@ -103,6 +98,7 @@ def check_domains(config_path="app/config.json"):
             "issuer": parsed["issuer"],
             "san": parsed["san"],
             "chain": parsed["chain"],
+            "chain_incomplete": parsed["chain_incomplete"],
             "alert": parsed["days_left"] <= alert_days
         })
 
