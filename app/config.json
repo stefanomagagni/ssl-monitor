@@ -1,7 +1,7 @@
 {
   "domains": [
     {
-      "url": "integration.asl.novara.it",
+      "url": "https://integration.asl.novara.it",
       "port": 9450,
       "service_name": "PagoPA",
       "alert_days": 15
