@@ -1,14 +1,20 @@
 {
   "domains": [
     {
-      "url": "10.11.12.13",
-      "port": 9078,
+      "url": "integration.asl.novara.it",
+      "port": 9450,
       "service_name": "PagoPA",
       "alert_days": 15
     },
     {
-      "url": "fwgitlab.dedagroup.it",
-      "service_name": "GitLab",
+      "url": "http://arss.asl13.it",
+      "port": 8080,
+      "service_name": "firma aruba",
+      "alert_days": 15
+    },
+    {
+      "url": "https://meuiweb.asl.novara.it",
+      "service_name": "web meui prod",
       "alert_days": 15
     }
   ],
