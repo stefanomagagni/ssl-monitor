@@ -26,8 +26,9 @@ def dashboard():
                 padding: 0;
                 text-align: center;
             }
+
             header {
-                background-color: rgba(0, 0, 0, 0.6);
+                background-color: rgba(0,0,0,0.65);
                 padding: 20px;
             }
             header img {
@@ -35,45 +36,83 @@ def dashboard():
             }
             h1 {
                 margin-top: 10px;
-                font-size: 2.5em;
+                font-size: 2.7em;
             }
+
             table {
-                width: 90%;
+                width: 92%;
                 margin: 30px auto;
                 border-collapse: collapse;
                 background-color: rgba(0, 0, 0, 0.7);
-                border-radius: 10px;
+                border-radius: 12px;
                 overflow: hidden;
-                box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+                box-shadow: 0 5px 18px rgba(0,0,0,0.55);
             }
-            th, td {
-                padding: 15px;
-                text-align: center;
-            }
+
             th {
-                background-color: rgba(255, 255, 255, 0.2);
+                background-color: rgba(255,255,255,0.18);
+                padding: 14px;
                 font-size: 1.1em;
             }
+
+            td {
+                padding: 12px;
+            }
+
             tr:nth-child(even) {
-                background-color: rgba(255, 255, 255, 0.1);
+                background-color: rgba(255,255,255,0.08);
             }
             tr:hover {
-                background-color: rgba(255, 255, 255, 0.2);
+                background-color: rgba(255,255,255,0.18);
             }
+
             .error {
                 color: #ff8080;
                 font-weight: bold;
+                text-align: center;
             }
+
             .issuer {
-                font-size: 0.9em;
-                color: #ddd;
+                font-size: 0.85em;
+                color: #e0e0e0;
+                max-width: 250px;
+                word-wrap: break-word;
             }
+
             .san {
-                font-size: 0.8em;
+                font-size: 0.75em;
                 color: #ccc;
+                max-width: 250px;
+                word-wrap: break-word;
             }
+
+            .tooltip {
+                position: relative;
+                cursor: help;
+            }
+            .tooltip span {
+                visibility: hidden;
+                background-color: black;
+                color: #fff;
+                text-align: left;
+                padding: 8px;
+                border-radius: 5px;
+                position: absolute;
+                z-index: 1;
+                width: 300px;
+                left: 50%;
+                transform: translateX(-50%);
+                bottom: 130%;
+                opacity: 0;
+                transition: opacity 0.3s;
+            }
+            .tooltip:hover span {
+                visibility: visible;
+                opacity: 1;
+            }
+
             footer {
-                background-color: rgba(0, 0, 0, 0.6);
+                background-color: rgba(0,0,0,0.65);
                 padding: 10px;
                 position: fixed;
                 bottom: 0;
@@ -83,6 +122,7 @@ def dashboard():
             }
         </style>
     </head>
+
     <body>
         <header>
             <img src="https://raw.githubusercontent.com/stefanomagagni/ssl-monitor/main/app/logo_deda.png" alt="Deda Next Logo">
@@ -91,14 +131,15 @@ def dashboard():
 
         <table>
             <tr>
-                <th>Domain</th>
-                <th>Expires</th>
-                <th>Days Left</th>
-                <th>Issuer (CA)</th>
-                <th>SAN</th>
+                <th style="width: 22%;">Domain</th>
+                <th style="width: 10%;">Expires</th>
+                <th style="width: 8%;">Days Left</th>
+                <th style="width: 25%;">Issuer (CA)</th>
+                <th style="width: 35%;">SAN</th>
             </tr>
     """
 
+    # --- Generate each table row ---
     for r in results:
         if "error" in r:
             html += f"""
@@ -108,17 +149,34 @@ def dashboard():
             </tr>"""
         else:
             color = "red" if r["alert"] else "lightgreen"
+
+            # Abbreviated SAN preview (first 2 entries)
+            san_preview = ", ".join(r["san"][:2])
+            san_full = ", ".join(r["san"])
+
+            issuer_preview = r["issuer"][:40] + "..." if len(r["issuer"]) > 40 else r["issuer"]
+
             html += f"""
             <tr>
                 <td>{r['domain']}</td>
                 <td>{r['expires']}</td>
-                <td style='color:{color}'>{r['days_left']}</td>
-                <td class='issuer'>{r['issuer']}</td>
-                <td class='san'>{", ".join(r['san'])}</td>
-            </tr>"""
+                <td style="color:{color}; font-weight:bold;">{r['days_left']}</td>
+
+                <td class='issuer tooltip'>
+                    {issuer_preview}
+                    <span>{r['issuer']}</span>
+                </td>
+
+                <td class='san tooltip'>
+                    {san_preview}...
+                    <span>{san_full}</span>
+                </td>
+            </tr>
+            """
 
     html += """
         </table>
+
         <footer>
             © 2025 Deda Next – Internal SSL Monitoring Dashboard
         </footer>
