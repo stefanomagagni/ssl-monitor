@@ -1,34 +1,34 @@
 import ssl
 import socket
+import datetime
 import json
-from datetime import datetime
 
-def get_cert_info(hostname):
+def get_cert_info(domain):
+    """Recupera informazioni complete sul certificato SSL."""
     try:
+        hostname = domain.replace("https://", "").replace("http://", "").split("/")[0]
+
         ctx = ssl.create_default_context()
         with socket.create_connection((hostname, 443), timeout=5) as sock:
             with ctx.wrap_socket(sock, server_hostname=hostname) as ssock:
                 cert = ssock.getpeercert()
 
-        # Expiry date
-        expires = datetime.strptime(cert["notAfter"], "%b %d %H:%M:%S %Y %Z")
-        days_left = (expires - datetime.utcnow()).days
+        # Data di scadenza
+        expiry = datetime.datetime.strptime(cert["notAfter"], "%b %d %H:%M:%S %Y %Z")
 
-        # Issuer (CA)
-        issuer_data = cert.get("issuer", [])
-        issuer = " ".join(x[0][1] for x in issuer_data if isinstance(x, tuple))
+        # CA / Issuer
+        issuer = ", ".join(x[0][1] for x in cert["issuer"])
 
-        # SAN (Subject Alternative Names)
-        san_list = []
-        for typ, val in cert.get("subjectAltName", []):
-            if typ == "DNS":
-                san_list.append(val)
+        # SAN
+        san = []
+        for ext in cert.get("subjectAltName", []):
+            san.append(ext[1])
 
         return {
-            "expires": expires.strftime("%Y-%m-%d"),
-            "days_left": days_left,
-            "issuer": issuer or "Unknown",
-            "san": san_list
+            "expires": expiry.strftime("%Y-%m-%d"),
+            "days_left": (expiry - datetime.datetime.utcnow()).days,
+            "issuer": issuer,
+            "san": san
         }
 
     except Exception as e:
@@ -36,13 +36,14 @@ def get_cert_info(hostname):
 
 
 def check_domains(config_path="app/config.json"):
+    """Legge i domini dal config e costruisce il risultato completo."""
     with open(config_path) as f:
         conf = json.load(f)
 
     results = []
 
     for d in conf["domains"]:
-        url = d["url"].replace("https://", "").replace("http://", "").strip("/")
+        url = d["url"]
         alert_days = d.get("alert_days", conf.get("notify_before_days", 15))
 
         cert = get_cert_info(url)
@@ -54,15 +55,13 @@ def check_domains(config_path="app/config.json"):
             })
             continue
 
-        alert = cert["days_left"] <= alert_days
-
         results.append({
             "domain": url,
             "expires": cert["expires"],
             "days_left": cert["days_left"],
             "issuer": cert["issuer"],
             "san": cert["san"],
-            "alert": alert
+            "alert": cert["days_left"] <= alert_days
         })
 
     return results
