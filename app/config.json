@@ -1,19 +1,19 @@
 {
   "domains": [
     {
-      "url": "https://integration.asl.novara.it",
+      "url": "integration.asl.novara.it",
       "port": 9450,
       "service_name": "PagoPA",
       "alert_days": 15
     },
     {
-      "url": "http://arss.asl13.it",
+      "url": "arss.asl13.it",
       "port": 8080,
       "service_name": "firma aruba",
       "alert_days": 15
     },
     {
-      "url": "https://meuiweb.asl.novara.it",
+      "url": "meuiweb.asl.novara.it",
       "port": 443,
       "service_name": "web meui prod",
       "alert_days": 15
