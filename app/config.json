@@ -14,6 +14,7 @@
     },
     {
       "url": "https://meuiweb.asl.novara.it",
+      "port": 443,
       "service_name": "web meui prod",
       "alert_days": 15
     }
