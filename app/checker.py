@@ -1,42 +1,20 @@
-import ssl
-import socket
-import datetime
-import json
+import ssl, socket, json
+from datetime import datetime
 
-def get_cert_info(domain):
-    """Recupera informazioni complete sul certificato SSL."""
-    try:
-        hostname = domain.replace("https://", "").replace("http://", "").split("/")[0]
+def get_cert_expiry(host, port=443):
+    ctx = ssl.create_default_context()
+    with socket.create_connection((host, port), timeout=5) as sock:
+        with ctx.wrap_socket(sock, server_hostname=host) as ssock:
+            cert = ssock.getpeercert()
 
-        ctx = ssl.create_default_context()
-        with socket.create_connection((hostname, 443), timeout=5) as sock:
-            with ctx.wrap_socket(sock, server_hostname=hostname) as ssock:
-                cert = ssock.getpeercert()
+    expires = datetime.strptime(cert['notAfter'], "%b %d %H:%M:%S %Y %Z")
+    issuer = " ".join(v[0][1] for v in cert['issuer'])
+    san = [x[1] for x in cert.get('subjectAltName', [])]
 
-        # Data di scadenza
-        expiry = datetime.datetime.strptime(cert["notAfter"], "%b %d %H:%M:%S %Y %Z")
-
-        # CA / Issuer
-        issuer = ", ".join(x[0][1] for x in cert["issuer"])
-
-        # SAN
-        san = []
-        for ext in cert.get("subjectAltName", []):
-            san.append(ext[1])
-
-        return {
-            "expires": expiry.strftime("%Y-%m-%d"),
-            "days_left": (expiry - datetime.datetime.utcnow()).days,
-            "issuer": issuer,
-            "san": san
-        }
-
-    except Exception as e:
-        return {"error": str(e)}
+    return expires.date(), issuer, san
 
 
 def check_domains(config_path="app/config.json"):
-    """Legge i domini dal config e costruisce il risultato completo."""
     with open(config_path) as f:
         conf = json.load(f)
 
@@ -44,24 +22,32 @@ def check_domains(config_path="app/config.json"):
 
     for d in conf["domains"]:
         url = d["url"]
-        alert_days = d.get("alert_days", conf.get("notify_before_days", 15))
+        port = d.get("port", 443)
+        service = d.get("service_name", "-")
+        alert_days = d.get("alert_days", 15)
 
-        cert = get_cert_info(url)
+        try:
+            expires, issuer, san = get_cert_expiry(url, port)
+            days_left = (expires - datetime.now().date()).days
+            alert = days_left < alert_days
 
-        if "error" in cert:
             results.append({
                 "domain": url,
-                "error": cert["error"]
+                "port": port,
+                "service": service,
+                "expires": str(expires),
+                "days_left": days_left,
+                "issuer": issuer,
+                "san": san,
+                "alert": alert
             })
-            continue
 
-        results.append({
-            "domain": url,
-            "expires": cert["expires"],
-            "days_left": cert["days_left"],
-            "issuer": cert["issuer"],
-            "san": cert["san"],
-            "alert": cert["days_left"] <= alert_days
-        })
+        except Exception as e:
+            results.append({
+                "domain": url,
+                "port": port,
+                "service": service,
+                "error": str(e)
+            })
 
     return results
