@@ -40,7 +40,7 @@ def dashboard():
             }
 
             table {
-                width: 92%;
+                width: 94%;
                 margin: 30px auto;
                 border-collapse: collapse;
                 background-color: rgba(0, 0, 0, 0.7);
@@ -131,11 +131,13 @@ def dashboard():
 
         <table>
             <tr>
-                <th style="width: 22%;">Domain</th>
+                <th style="width: 13%;">Service</th>
+                <th style="width: 22%;">Domain/IP</th>
+                <th style="width: 5%;">Port</th>
                 <th style="width: 10%;">Expires</th>
                 <th style="width: 8%;">Days Left</th>
-                <th style="width: 25%;">Issuer (CA)</th>
-                <th style="width: 35%;">SAN</th>
+                <th style="width: 22%;">Issuer (CA)</th>
+                <th style="width: 20%;">SAN</th>
             </tr>
     """
 
@@ -144,21 +146,23 @@ def dashboard():
         if "error" in r:
             html += f"""
             <tr>
+                <td>{r['service']}</td>
                 <td>{r['domain']}</td>
+                <td>{r['port']}</td>
                 <td colspan=4 class='error'>Errore: {r['error']}</td>
             </tr>"""
         else:
             color = "red" if r["alert"] else "lightgreen"
 
-            # Abbreviated SAN preview (first 2 entries)
             san_preview = ", ".join(r["san"][:2])
             san_full = ", ".join(r["san"])
-
             issuer_preview = r["issuer"][:40] + "..." if len(r["issuer"]) > 40 else r["issuer"]
 
             html += f"""
             <tr>
+                <td>{r['service']}</td>
                 <td>{r['domain']}</td>
+                <td>{r['port']}</td>
                 <td>{r['expires']}</td>
                 <td style="color:{color}; font-weight:bold;">{r['days_left']}</td>
 
