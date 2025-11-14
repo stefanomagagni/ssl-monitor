@@ -5,15 +5,29 @@ from OpenSSL import crypto
 
 
 def fetch_certificate(host, port):
-    """Fetch certificate WITHOUT validation (chain can be incomplete)."""
+    """
+    Fetch certificate WITHOUT validation.
+    Uses SECLEVEL=0 to allow legacy servers (Actalis, vecchi Java, TLS1.0/1.1).
+    """
     try:
-        conn = socket.create_connection((host, port), timeout=5)
-        context = ssl._create_unverified_context()
-        sock = context.wrap_socket(conn, server_hostname=host)
+        conn = socket.create_connection((host, port), timeout=7)
 
+        # Context permissivo per server legacy
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+
+        # Supporto per ciphers legacy (fondamentale)
+        try:
+            context.set_ciphers("ALL:@SECLEVEL=0")
+        except Exception:
+            pass
+
+        sock = context.wrap_socket(conn, server_hostname=host)
         der_cert = sock.getpeercert(True)
         sock.close()
 
+        # Converte DER → X509
         return crypto.load_certificate(crypto.FILETYPE_ASN1, der_cert)
 
     except ssl.SSLError as e:
@@ -23,12 +37,10 @@ def fetch_certificate(host, port):
 
 
 def parse_certificate(cert):
-    """Extract fields even if chain is incomplete."""
+    """Extract data even if certificate chain is incomplete."""
     try:
-        # Expiration
-        expires = datetime.strptime(
-            cert.get_notAfter().decode(), "%Y%m%d%H%M%SZ"
-        )
+        # Expiration date
+        expires = datetime.strptime(cert.get_notAfter().decode(), "%Y%m%d%H%M%SZ")
         days_left = (expires - datetime.utcnow()).days
 
         # Issuer
@@ -38,7 +50,7 @@ def parse_certificate(cert):
             issuer_parts.get(b"CN", b"").decode()
         ]).strip(", ")
 
-        # SAN list
+        # SAN
         san_list = []
         for i in range(cert.get_extension_count()):
             ext = cert.get_extension(i)
@@ -46,15 +58,12 @@ def parse_certificate(cert):
                 san_list = [entry.strip() for entry in str(ext).split(",")]
                 break
 
-        # Chain info → always incomplete (server does not send intermediates)
-        chain_status = "⚠️ Incomplete or not provided by server"
-
         return {
             "expires": expires.strftime("%Y-%m-%d"),
             "days_left": days_left,
             "issuer": issuer if issuer else "Unknown",
             "san": san_list,
-            "chain": chain_status,
+            "chain": "⚠️ Incomplete or not provided by server",
             "chain_incomplete": True
         }
 
@@ -119,9 +128,7 @@ def check_domains(config_path="app/config.json"):
             "alert": parsed["days_left"] <= alert_days
         })
 
-    # ------------------------------
-    # Sort by expiry date
-    # ------------------------------
+    # SORT BY EXPIRY DATE (errori in fondo)
     def sort_key(item):
         if "error" in item:
             return (99999, item["service"])
