@@ -86,6 +86,12 @@ def dashboard():
                 word-wrap: break-word;
             }
 
+            .chain-warning {
+                color: orange;
+                font-weight: bold;
+                font-size: 1.3em;
+            }
+
             .tooltip {
                 position: relative;
                 cursor: help;
@@ -99,7 +105,7 @@ def dashboard():
                 border-radius: 5px;
                 position: absolute;
                 z-index: 1;
-                width: 300px;
+                width: 280px;
                 left: 50%;
                 transform: translateX(-50%);
                 bottom: 130%;
@@ -131,36 +137,45 @@ def dashboard():
 
         <table>
             <tr>
-                <th style="width: 13%;">Service</th>
-                <th style="width: 22%;">Domain/IP</th>
-                <th style="width: 5%;">Port</th>
-                <th style="width: 10%;">Expires</th>
-                <th style="width: 8%;">Days Left</th>
-                <th style="width: 22%;">Issuer (CA)</th>
-                <th style="width: 20%;">SAN</th>
+                <th>Service</th>
+                <th>Domain/IP</th>
+                <th>Port</th>
+                <th>Expires</th>
+                <th>Days Left</th>
+                <th>Issuer (CA)</th>
+                <th>SAN</th>
+                <th>Chain</th>
             </tr>
     """
 
-    # --- Generate each table row ---
     for r in results:
         if "error" in r:
             html += f"""
             <tr>
-                <td>{r['service']}</td>
+                <td>{r.get('service','')}</td>
                 <td>{r['domain']}</td>
-                <td>{r['port']}</td>
-                <td colspan=4 class='error'>Errore: {r['error']}</td>
+                <td>{r.get('port','')}</td>
+                <td colspan=5 class='error'>Errore: {r['error']}</td>
             </tr>"""
         else:
             color = "red" if r["alert"] else "lightgreen"
 
+            # issuer preview
+            issuer_preview = r["issuer"][:40] + "..." if len(r["issuer"]) > 40 else r["issuer"]
+
+            # SAN preview
             san_preview = ", ".join(r["san"][:2])
             san_full = ", ".join(r["san"])
-            issuer_preview = r["issuer"][:40] + "..." if len(r["issuer"]) > 40 else r["issuer"]
+
+            # chain indicator
+            if r["chain_incomplete"]:
+                chain_icon = "<span class='chain-warning tooltip'>⚠<span>La chain del certificato è incompleta (manca CA intermedia)</span></span>"
+            else:
+                chain_icon = "<span style='color:lightgreen;font-size:1.3em;'>✔</span>"
 
             html += f"""
             <tr>
-                <td>{r['service']}</td>
+                <td>{r.get('service','')}</td>
                 <td>{r['domain']}</td>
                 <td>{r['port']}</td>
                 <td>{r['expires']}</td>
@@ -175,6 +190,8 @@ def dashboard():
                     {san_preview}...
                     <span>{san_full}</span>
                 </td>
+
+                <td>{chain_icon}</td>
             </tr>
             """
 
@@ -189,3 +206,4 @@ def dashboard():
     """
 
     return html
+
