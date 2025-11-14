@@ -38,7 +38,7 @@ def dashboard():
                 font-size: 2.5em;
             }
             table {
-                width: 80%;
+                width: 90%;
                 margin: 30px auto;
                 border-collapse: collapse;
                 background-color: rgba(0, 0, 0, 0.7);
@@ -82,16 +82,23 @@ def dashboard():
         </header>
 
         <table border="1">
-            <tr><th>Domain</th><th>Expires</th><th>Days Left</th></tr>
+            <tr><th>Domain</th><th>Expires</th><th>Days Left</th><th>Issuer (CA)</th></tr>
     """
 
     # Aggiunge le righe della tabella dinamicamente
     for r in results:
         if "error" in r:
-            html += f"<tr><td>{r['domain']}</td><td colspan=2 class='error'>Errore: {r['error']}</td></tr>"
+            html += f"<tr><td>{r['domain']}</td><td colspan=3 class='error'>Errore: {r['error']}</td></tr>"
         else:
             color = "red" if r["alert"] else "lightgreen"
-            html += f"<tr><td>{r['domain']}</td><td>{r['expires']}</td><td style='color:{color}'>{r['days_left']}</td></tr>"
+            html += (
+                f"<tr>"
+                f"<td>{r['domain']}</td>"
+                f"<td>{r['expires']}</td>"
+                f"<td style='color:{color}'>{r['days_left']}</td>"
+                f"<td>{r['issuer']}</td>"
+                f"</tr>"
+            )
 
     html += """
         </table>
@@ -103,4 +110,3 @@ def dashboard():
     """
 
     return html
-
