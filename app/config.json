@@ -7,15 +7,45 @@
       "alert_days": 15
     },
     {
-      "url": "arss.asl13.it",
-      "port": 8080,
-      "service_name": "firma aruba",
+      "url": "liveintegrator.asl13.it",
+      "port": 32500,
+      "service_name": "amco",
       "alert_days": 15
     },
     {
       "url": "meuiweb.asl.novara.it",
       "port": 443,
       "service_name": "web meui prod",
+      "alert_days": 15
+    },
+    {
+      "url": "10.54.98.200",
+      "port": 25020,
+      "service_name": "tesi",
+      "alert_days": 15
+    },
+    {
+      "url": "10.54.201.238",
+      "port": 21112,
+      "service_name": "ris2",
+      "alert_days": 15
+    },
+    {
+      "url": "10.54.210.115",
+      "port": 21110,
+      "service_name": "ris",
+      "alert_days": 15
+    },
+    {
+      "url": "10.76.10.194",
+      "port": 6001,
+      "service_name": "olympus",
+      "alert_days": 15
+    },
+    {
+      "url": "10.54.210.117",
+      "port": 51120,
+      "service_name": "mystar",
       "alert_days": 15
     }
   ],
