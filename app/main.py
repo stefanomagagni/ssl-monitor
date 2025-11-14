@@ -1,13 +1,26 @@
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from .checker import check_domains
 from .notifier import notify
+import io
+import csv
 
 app = FastAPI()
+
+
+def sort_results(results):
+    """Ordina per giorni rimanenti, mettendo gli errori in fondo."""
+    def key_fn(r):
+        if "error" in r:
+            return (1, 999999)
+        return (0, r.get("days_left", 999999))
+    return sorted(results, key=key_fn)
+
 
 @app.get("/", response_class=HTMLResponse)
 def dashboard():
     results = check_domains()
+    results = sort_results(results)
     notify(results)
 
     html = """
@@ -39,9 +52,28 @@ def dashboard():
                 font-size: 2.7em;
             }
 
+            .actions {
+                margin-top: 10px;
+            }
+
+            .actions button {
+                background-color: #1976d2;
+                border: none;
+                color: white;
+                padding: 8px 16px;
+                margin: 4px;
+                border-radius: 6px;
+                cursor: pointer;
+                font-size: 0.95em;
+            }
+
+            .actions button:hover {
+                background-color: #12589a;
+            }
+
             table {
                 width: 94%;
-                margin: 30px auto;
+                margin: 20px auto 40px auto;
                 border-collapse: collapse;
                 background-color: rgba(0, 0, 0, 0.7);
                 border-radius: 12px;
@@ -52,7 +84,7 @@ def dashboard():
             th {
                 background-color: rgba(255,255,255,0.18);
                 padding: 14px;
-                font-size: 1.1em;
+                font-size: 1.05em;
             }
 
             td {
@@ -90,6 +122,12 @@ def dashboard():
                 color: orange;
                 font-weight: bold;
                 font-size: 1.3em;
+            }
+
+            .chain-ok {
+                color: lightgreen;
+                font-size: 1.3em;
+                font-weight: bold;
             }
 
             .tooltip {
@@ -133,6 +171,9 @@ def dashboard():
         <header>
             <img src="https://raw.githubusercontent.com/stefanomagagni/ssl-monitor/main/app/logo_deda.png" alt="Deda Next Logo">
             <h1>SSL Monitor</h1>
+            <div class="actions">
+                <button onclick="window.location.href='/export'">Esporta CSV</button>
+            </div>
         </header>
 
         <table>
@@ -149,56 +190,60 @@ def dashboard():
     """
 
     for r in results:
-
-        # -----------------------------------
-        #   CASE 1 → ERROR ENTRY
-        # -----------------------------------
         if "error" in r:
             html += f"""
             <tr>
                 <td>{r.get('service','')}</td>
                 <td>{r['domain']}</td>
                 <td>{r.get('port','')}</td>
-                <td colspan=5 class='error'>Errore: {r['error']}</td>
+                <td colspan="5" class="error">Errore: {r['error']}</td>
             </tr>"""
-            continue
-
-        # -----------------------------------
-        #   CASE 2 → VALID CERTIFICATE
-        # -----------------------------------
-        color = "red" if r["alert"] else "lightgreen"
-
-        issuer_preview = r["issuer"][:40] + "..." if len(r["issuer"]) > 40 else r["issuer"]
-
-        san_preview = ", ".join(r["san"][:2])
-        san_full = ", ".join(r["san"])
-
-        if r.get("chain_incomplete", False):
-            chain_icon = "<span class='chain-warning tooltip'>⚠<span>La chain del certificato è incompleta (manca CA intermedia)</span></span>"
         else:
-            chain_icon = "<span style='color:lightgreen;font-size:1.3em;'>✔</span>"
+            # Colore semaforo: rosso / giallo / verde
+            if r["days_left"] <= 0:
+                color = "#ff4d4d"          # scaduto
+            elif r.get("alert"):
+                color = "#ffcc00"          # in alert
+            else:
+                color = "lightgreen"       # ok
 
-        html += f"""
-        <tr>
-            <td>{r.get('service','')}</td>
-            <td>{r['domain']}</td>
-            <td>{r['port']}</td>
-            <td>{r['expires']}</td>
-            <td style="color:{color}; font-weight:bold;">{r['days_left']}</td>
+            issuer_preview = r["issuer"][:40] + "..." if len(r["issuer"]) > 40 else r["issuer"]
 
-            <td class='issuer tooltip'>
-                {issuer_preview}
-                <span>{r['issuer']}</span>
-            </td>
+            san_preview = ", ".join(r["san"][:2])
+            san_full = ", ".join(r["san"])
 
-            <td class='san tooltip'>
-                {san_preview}...
-                <span>{san_full}</span>
-            </td>
+            # Chain: se abbiamo chain_incomplete True → ⚠, altrimenti ✔
+            if r.get("chain_incomplete"):
+                chain_icon = (
+                    "<span class='chain-warning tooltip'>⚠"
+                    "<span>La chain del certificato potrebbe essere incompleta "
+                    "(es. manca la CA intermedia), o non è stata validata completamente.</span>"
+                    "</span>"
+                )
+            else:
+                chain_icon = "<span class='chain-ok'>✔</span>"
 
-            <td>{chain_icon}</td>
-        </tr>
-        """
+            html += f"""
+            <tr>
+                <td>{r.get('service','')}</td>
+                <td>{r['domain']}</td>
+                <td>{r['port']}</td>
+                <td>{r['expires']}</td>
+                <td style="color:{color}; font-weight:bold;">{r['days_left']}</td>
+
+                <td class='issuer tooltip'>
+                    {issuer_preview}
+                    <span>{r['issuer']}</span>
+                </td>
+
+                <td class='san tooltip'>
+                    {san_preview}...
+                    <span>{san_full}</span>
+                </td>
+
+                <td>{chain_icon}</td>
+            </tr>
+            """
 
     html += """
         </table>
@@ -211,3 +256,48 @@ def dashboard():
     """
 
     return html
+
+
+@app.get("/export", response_class=PlainTextResponse)
+def export_csv():
+    """Esporta lo stato corrente in CSV."""
+    results = check_domains()
+    results = sort_results(results)
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    writer.writerow(["Service", "Domain", "Port", "Expires", "Days Left", "Issuer", "SAN", "Chain / Error"])
+
+    for r in results:
+        if "error" in r:
+            writer.writerow([
+                r.get("service", ""),
+                r.get("domain", ""),
+                r.get("port", ""),
+                "",
+                "",
+                "",
+                "",
+                f"ERROR: {r['error']}",
+            ])
+        else:
+            writer.writerow([
+                r.get("service", ""),
+                r.get("domain", ""),
+                r.get("port", ""),
+                r.get("expires", ""),
+                r.get("days_left", ""),
+                r.get("issuer", ""),
+                "; ".join(r.get("san", [])),
+                r.get("chain", ""),
+            ])
+
+    csv_data = output.getvalue()
+    output.close()
+
+    return PlainTextResponse(
+        csv_data,
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="ssl_report.csv"'}
+    )
