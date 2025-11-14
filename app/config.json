@@ -1,17 +1,27 @@
 {
   "domains": [
-    { "url": "https://easyredmine.dedagroup.it", "alert_days": 15 },
-    { "url": "https://fwredmine.dedagroup.it", "alert_days": 15 },
-    { "url": "https://fwsonarqube.dedagroup.it", "alert_days": 363 },
-    { "url": "https://fwgitlab.dedagroup.it", "alert_days": 355 }
+    {
+      "url": "10.11.12.13",
+      "port": 9078,
+      "service_name": "PagoPA",
+      "alert_days": 15
+    },
+    {
+      "url": "fwgitlab.dedagroup.it",
+      "service_name": "GitLab",
+      "alert_days": 15
+    }
   ],
   "notify_before_days": 15,
-  "email": {
-    "enabled": true,
-    "smtp_server": "smtp1.nco.inet",
-    "smtp_port": 25,
-    "use_tls": false,
-    "from": "ssl-monitor@dedagroup.it",
-    "to": ["stefano.magagni@dedagroup.it"]
+  "notification": {
+    "method": "email",
+    "email": {
+      "enabled": true,
+      "smtp_server": "smtp1.nco.inet",
+      "smtp_port": 25,
+      "use_tls": false,
+      "from": "ssl-monitor@dedagroup.it",
+      "to": ["stefano.magagni@dedagroup.it"]
+    }
   }
 }
