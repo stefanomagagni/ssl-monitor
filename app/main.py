@@ -64,6 +64,14 @@ def dashboard():
                 color: #ff8080;
                 font-weight: bold;
             }
+            .issuer {
+                font-size: 0.9em;
+                color: #ddd;
+            }
+            .san {
+                font-size: 0.8em;
+                color: #ccc;
+            }
             footer {
                 background-color: rgba(0, 0, 0, 0.6);
                 padding: 10px;
@@ -81,24 +89,33 @@ def dashboard():
             <h1>SSL Monitor</h1>
         </header>
 
-        <table border="1">
-            <tr><th>Domain</th><th>Expires</th><th>Days Left</th><th>Issuer (CA)</th></tr>
+        <table>
+            <tr>
+                <th>Domain</th>
+                <th>Expires</th>
+                <th>Days Left</th>
+                <th>Issuer (CA)</th>
+                <th>SAN</th>
+            </tr>
     """
 
-    # Aggiunge le righe della tabella dinamicamente
     for r in results:
         if "error" in r:
-            html += f"<tr><td>{r['domain']}</td><td colspan=3 class='error'>Errore: {r['error']}</td></tr>"
+            html += f"""
+            <tr>
+                <td>{r['domain']}</td>
+                <td colspan=4 class='error'>Errore: {r['error']}</td>
+            </tr>"""
         else:
             color = "red" if r["alert"] else "lightgreen"
-            html += (
-                f"<tr>"
-                f"<td>{r['domain']}</td>"
-                f"<td>{r['expires']}</td>"
-                f"<td style='color:{color}'>{r['days_left']}</td>"
-                f"<td>{r['issuer']}</td>"
-                f"</tr>"
-            )
+            html += f"""
+            <tr>
+                <td>{r['domain']}</td>
+                <td>{r['expires']}</td>
+                <td style='color:{color}'>{r['days_left']}</td>
+                <td class='issuer'>{r['issuer']}</td>
+                <td class='san'>{", ".join(r['san'])}</td>
+            </tr>"""
 
     html += """
         </table>
