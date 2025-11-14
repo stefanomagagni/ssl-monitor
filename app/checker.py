@@ -1,94 +1,109 @@
-import socket
 import ssl
+import socket
 from datetime import datetime
-from cryptography import x509
-from cryptography.hazmat.backends import default_backend
-import idna
+from OpenSSL import crypto
 
-
-def get_certificate(hostname, port):
+def fetch_certificate(host, port):
+    """Fetch certificate WITHOUT validation (chain can be incomplete)."""
     try:
-        hostname_idna = idna.encode(hostname).decode()
-        context = ssl.create_default_context()
+        conn = socket.create_connection((host, port), timeout=5)
+        context = ssl._create_unverified_context()
+        sock = context.wrap_socket(conn, server_hostname=host)
+        der_cert = sock.getpeercert(True)
+        sock.close()
 
-        with socket.create_connection((hostname, port), timeout=5) as sock:
-            with context.wrap_socket(sock, server_hostname=hostname_idna) as ssock:
-                cert_der = ssock.getpeercert(binary_form=True)
-                chain = ssock.get_verified_chain() if hasattr(ssock, "get_verified_chain") else None
+        return crypto.load_certificate(crypto.FILETYPE_ASN1, der_cert)
 
-        cert = x509.load_der_x509_certificate(cert_der, default_backend())
-        return cert, chain
+    except ssl.SSLError as e:
+        return f"SSL error: {e}"
+    except Exception as e:
+        return f"Connection error: {e}"
+
+def parse_certificate(cert):
+    """Extract fields even if chain is incomplete."""
+    try:
+        # Expiration date
+        expires = datetime.strptime(cert.get_notAfter().decode(), "%Y%m%d%H%M%SZ")
+        days_left = (expires - datetime.utcnow()).days
+
+        # Issuer
+        issuer_parts = dict(cert.get_issuer().get_components())
+        issuer = ", ".join([
+            issuer_parts.get(b"O", b"").decode(),
+            issuer_parts.get(b"CN", b"").decode()
+        ]).strip(", ")
+
+        # SAN (Subject Alternative Names)
+        san_list = []
+        ext_count = cert.get_extension_count()
+
+        for i in range(ext_count):
+            ext = cert.get_extension(i)
+            if ext.get_short_name() == b"subjectAltName":
+                san_list = [entry.strip() for entry in str(ext).split(",")]
+                break
+
+        # Certificate Chain → not available here, we mark it as "unknown"
+        chain_status = "⚠️ Incomplete or not provided by server"
+
+        return {
+            "expires": expires.strftime("%Y-%m-%d"),
+            "days_left": days_left,
+            "issuer": issuer if issuer else "Unknown",
+            "san": san_list,
+            "chain": chain_status
+        }
 
     except Exception as e:
-        return None, str(e)
-
-
-def parse_certificate(cert, chain):
-    issuer = ", ".join([f"{name.oid._name}: {name.value}" for name in cert.issuer])
-    san_list = []
-
-    try:
-        ext = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName)
-        san_list = ext.value.get_values_for_type(x509.DNSName)
-    except:
-        pass
-
-    expires = cert.not_valid_after
-    days_left = (expires - datetime.utcnow()).days
-
-    chain_info = []
-    if chain:
-        for c in chain:
-            chain_info.append(c.subject.rfc4514_string())
-
-    return issuer, san_list, expires.strftime("%Y-%m-%d"), days_left, chain_info
-
+        return {"error": f"Parsing error: {e}"}
 
 def check_domains(config_path="app/config.json"):
     import json
+
     with open(config_path) as f:
-        conf = json.load(f)
+        config = json.load(f)
 
     results = []
 
-    for item in conf["domains"]:
-        url = item["url"]
-        port = item.get("port", None)
-        service_name = item.get("service_name", "")
-        alert_days = item.get("alert_days", conf.get("notify_before_days", 15))
+    for entry in config["domains"]:
+        host = entry.get("url")
+        port = entry.get("port", 443)
+        service = entry.get("service_name")
+        alert_days = entry.get("alert_days", config.get("notify_before_days", 15))
 
-        if not port:
+        cert = fetch_certificate(host, port)
+
+        if isinstance(cert, str):
+            # Error message
             results.append({
-                "service": service_name,
-                "domain": url,
-                "port": None,
-                "error": "Porta mancante, devi specificarla nel config.json"
-            })
-            continue
-
-        cert, error = get_certificate(url, port)
-
-        if error:
-            results.append({
-                "service": service_name,
-                "domain": url,
+                "service": service,
+                "domain": host,
                 "port": port,
-                "error": error
+                "error": cert
             })
             continue
 
-        issuer, san, expires, days_left, chain = parse_certificate(cert, error)
+        parsed = parse_certificate(cert)
+
+        if "error" in parsed:
+            results.append({
+                "service": service,
+                "domain": host,
+                "port": port,
+                "error": parsed["error"]
+            })
+            continue
 
         results.append({
-            "service": service_name,
-            "domain": url,
+            "service": service,
+            "domain": host,
             "port": port,
-            "issuer": issuer,
-            "san": san,
-            "expires": expires,
-            "days_left": days_left,
-            "chain": chain,
-            "alert": days_left <= alert_days
+            "expires": parsed["expires"],
+            "days_left": parsed["days_left"],
+            "issuer": parsed["issuer"],
+            "san": parsed["san"],
+            "chain": parsed["chain"],
+            "alert": parsed["days_left"] <= alert_days
         })
 
     return results
