@@ -3,12 +3,14 @@ import socket
 from datetime import datetime
 from OpenSSL import crypto
 
+
 def fetch_certificate(host, port):
     """Fetch certificate WITHOUT validation (chain can be incomplete)."""
     try:
         conn = socket.create_connection((host, port), timeout=5)
         context = ssl._create_unverified_context()
         sock = context.wrap_socket(conn, server_hostname=host)
+
         der_cert = sock.getpeercert(True)
         sock.close()
 
@@ -23,16 +25,20 @@ def fetch_certificate(host, port):
 def parse_certificate(cert):
     """Extract fields even if chain is incomplete."""
     try:
-        expires = datetime.strptime(cert.get_notAfter().decode(), "%Y%m%d%H%M%SZ")
+        # Expiration
+        expires = datetime.strptime(
+            cert.get_notAfter().decode(), "%Y%m%d%H%M%SZ"
+        )
         days_left = (expires - datetime.utcnow()).days
 
+        # Issuer
         issuer_parts = dict(cert.get_issuer().get_components())
         issuer = ", ".join([
             issuer_parts.get(b"O", b"").decode(),
             issuer_parts.get(b"CN", b"").decode()
         ]).strip(", ")
 
-        # SAN
+        # SAN list
         san_list = []
         for i in range(cert.get_extension_count()):
             ext = cert.get_extension(i)
@@ -40,6 +46,7 @@ def parse_certificate(cert):
                 san_list = [entry.strip() for entry in str(ext).split(",")]
                 break
 
+        # Chain info → always incomplete (server does not send intermediates)
         chain_status = "⚠️ Incomplete or not provided by server"
 
         return {
@@ -48,11 +55,14 @@ def parse_certificate(cert):
             "issuer": issuer if issuer else "Unknown",
             "san": san_list,
             "chain": chain_status,
-            "chain_incomplete": True   # <── aggiunta fondamentale
+            "chain_incomplete": True
         }
 
     except Exception as e:
-        return {"error": f"Parsing error: {e}", "chain_incomplete": True}
+        return {
+            "error": f"Parsing error: {e}",
+            "chain_incomplete": True
+        }
 
 
 def check_domains(config_path="app/config.json"):
@@ -71,24 +81,31 @@ def check_domains(config_path="app/config.json"):
 
         cert = fetch_certificate(host, port)
 
+        # ERROR CASE
         if isinstance(cert, str):
             results.append({
                 "service": service,
                 "domain": host,
                 "port": port,
                 "error": cert,
-                "chain_incomplete": True   # <── serve SEMPRE
+                "chain_incomplete": True
             })
             continue
 
         parsed = parse_certificate(cert)
 
+        # PARSE ERROR CASE
         if "error" in parsed:
-            parsed["service"] = service
-            parsed["domain"] = host
-            parsed["port"] = port
-            return parsed
+            results.append({
+                "service": service,
+                "domain": host,
+                "port": port,
+                "error": parsed["error"],
+                "chain_incomplete": True
+            })
+            continue
 
+        # SUCCESS CASE
         results.append({
             "service": service,
             "domain": host,
@@ -101,5 +118,15 @@ def check_domains(config_path="app/config.json"):
             "chain_incomplete": parsed["chain_incomplete"],
             "alert": parsed["days_left"] <= alert_days
         })
+
+    # ------------------------------
+    # Sort by expiry date
+    # ------------------------------
+    def sort_key(item):
+        if "error" in item:
+            return (99999, item["service"])
+        return (item["days_left"], item["service"])
+
+    results.sort(key=sort_key)
 
     return results
