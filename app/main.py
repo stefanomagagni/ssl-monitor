@@ -5,15 +5,37 @@ from .notifier import notify
 import io
 import csv
 from openpyxl import Workbook
-from openpyxl.styles import PatternFill
+from openpyxl.styles import PatternFill, Font, Alignment
 import datetime
 import os
 
 app = FastAPI()
 
+# 🔥 ICON MAPPING (uguale per web & Excel)
+PROTOCOL_ICONS = {
+    "tls_modern": "🟢",
+    "tls_legacy": "🟠",
+    "ssl_obsolete": "🔴",
+    "tcp_open_not_tls": "⚫",
+    "timeout": "🕓",
+    "refused": "🚫",
+    "no_tls": "⚪",
+    None: "⚪",
+}
+
+# 🔥 EXCEL ROW COLORS (hex)
+ROW_COLORS = {
+    "tls_modern": "C6EFCE",        # green
+    "tls_legacy": "FFF2CC",        # yellow
+    "ssl_obsolete": "F4CCCC",      # red
+    "tcp_open_not_tls": "D9D9D9",  # gray
+    "timeout": "FCE5CD",           # orange
+    "refused": "EA9999",           # dark red
+    "no_tls": "EDEDED",            # light gray
+    None: "FFFFFF"
+}
 
 def sort_results(results):
-    """Ordina per giorni rimanenti, mettendo gli errori in fondo."""
     def key_fn(r):
         if "error" in r:
             return (1, 999999)
@@ -23,8 +45,7 @@ def sort_results(results):
 
 @app.get("/", response_class=HTMLResponse)
 def dashboard():
-    results = check_domains()
-    results = sort_results(results)
+    results = sort_results(check_domains())
     notify(results)
 
     html = """
@@ -34,86 +55,49 @@ def dashboard():
         <style>
             body {
                 background-image: url('https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=1400&q=80');
-                background-size: cover;
-                background-position: center;
+                background-size: cover; background-position: center;
                 background-attachment: fixed;
-                color: white;
-                font-family: Arial, sans-serif;
-                margin: 0;
-                padding: 0;
-                text-align: center;
+                color: white; font-family: Arial; text-align: center; margin:0;
             }
-
-            header {
-                background-color: rgba(0,0,0,0.65);
-                padding: 20px;
-            }
-            header img { max-height: 80px; }
-            h1 { margin-top: 10px; font-size: 2.7em; }
-
-            .actions { margin-top: 10px; }
+            header { background: rgba(0,0,0,0.65); padding:20px; }
+            header img { max-height:80px; }
+            h1 { font-size:2.7em; margin-top:10px; }
             .actions button {
-                background-color: #1976d2;
-                border: none;
-                color: white;
-                padding: 8px 16px;
-                margin: 4px;
-                border-radius: 6px;
-                cursor: pointer;
-                font-size: 0.95em;
+                background:#1976d2; padding:8px 16px; margin:4px; border-radius:6px;
+                border:none; color:white; cursor:pointer; font-size:0.95em;
             }
-            .actions button:hover { background-color: #12589a; }
-
-            .tooltip { position: relative; cursor: help; }
+            .actions button:hover { background:#12589a; }
+            .tooltip { position:relative; cursor:help; }
             .tooltip span {
-                visibility: hidden;
-                background-color: black;
-                color: #fff;
-                text-align: left;
-                padding: 8px;
-                border-radius: 5px;
-                position: absolute;
-                z-index: 1;
-                width: 260px;
-                left: 50%;
-                transform: translateX(-50%);
-                bottom: 130%;
-                opacity: 0;
-                transition: opacity 0.3s;
+                visibility:hidden; opacity:0; width:260px;
+                background:black; color:white; padding:8px;
+                border-radius:5px; text-align:left;
+                position:absolute; left:50%; transform:translateX(-50%);
+                bottom:130%; transition:0.3s;
             }
-            .tooltip:hover span { visibility: visible; opacity: 1; }
+            .tooltip:hover span { visibility:visible; opacity:1; }
 
             table {
-                width: 94%;
-                margin: 10px auto 40px auto;
-                border-collapse: collapse;
-                background-color: rgba(0, 0, 0, 0.7);
-                border-radius: 12px;
-                overflow: hidden;
-                box-shadow: 0 5px 18px rgba(0,0,0,0.55);
+                width:94%; margin:10px auto 40px auto; border-collapse:collapse;
+                background:rgba(0, 0, 0, 0.7); border-radius:12px; overflow:hidden;
+                box-shadow:0 5px 18px rgba(0,0,0,0.55);
             }
-            th { background-color: rgba(255,255,255,0.18); padding: 14px; font-size: 1.05em; }
-            td { padding: 12px; }
-            tr:nth-child(even){ background-color: rgba(255,255,255,0.08); }
-            tr:hover { background-color: rgba(255,255,255,0.18); }
+            th { background:rgba(255,255,255,0.18); padding:14px; font-size:1.05em; }
+            td { padding:12px; word-break:break-word; }
+            tr:nth-child(even){ background:rgba(255,255,255,0.08); }
+            tr:hover { background:rgba(255,255,255,0.18); }
 
-            .error { color: #ff8080; font-weight: bold; text-align: center; }
-
-            .issuer, .san { font-size: 0.85em; color: #e0e0e0; max-width: 250px; word-wrap: break-word; }
-            .san { font-size: 0.75em; color: #ccc; }
+            .error { color:#ff8080; font-weight:bold; }
+            .issuer { font-size:0.85em; color:#e0e0e0; }
+            .san { font-size:0.75em; color:#ccc; }
 
             .legend-container {
-                margin-top: 5px; margin-bottom: 10px;
-                background: rgba(0,0,0,0.55);
-                display: inline-block;
-                padding: 8px 18px;
-                border-radius: 10px;
-                font-size: 1.05em;
+                margin-top:5px; margin-bottom:10px; background:rgba(0,0,0,0.55);
+                display:inline-block; padding:8px 18px; border-radius:10px; font-size:1.05em;
             }
-            .legend-item { margin: 0 14px; display: inline-block; }
+            .legend-item { margin:0 14px; display:inline-block; }
         </style>
     </head>
-
     <body>
         <header>
             <img src="https://raw.githubusercontent.com/stefanomagagni/ssl-monitor/main/app/logo_deda.png">
@@ -126,96 +110,65 @@ def dashboard():
 
         <div class="legend-container">
             <span class="legend-item tooltip">🟢 TLS moderno<span>Supporta TLS1.2 / TLS1.3</span></span>
-            <span class="legend-item tooltip">🟠 TLS legacy<span>Protocollo TLS debole o datato</span></span>
-            <span class="legend-item tooltip">🔴 SSL obsoleto<span>SSLv2/3 non sicuro o fuori standard</span></span>
-            <span class="legend-item tooltip">⚪ Nessun certificato<span>Connessione non SSL/TLS</span></span>
+            <span class="legend-item tooltip">🟠 TLS legacy<span>Protocollo TLS datato</span></span>
+            <span class="legend-item tooltip">🔴 SSL obsoleto<span>SSlv2/3 non sicuro</span></span>
+            <span class="legend-item tooltip">⚫ No TLS<span>Porta aperta ma nessun SSL/TLS</span></span>
+            <span class="legend-item tooltip">🚫 Rifiutata<span>Connessione negata</span></span>
+            <span class="legend-item tooltip">🕓 Timeout<span>Nessuna risposta</span></span>
         </div>
 
         <table>
             <tr>
                 <th>Service</th><th>Domain/IP</th><th>Port</th><th>Protocol</th>
-                <th>Expires</th><th>Days Left</th><th>Issuer (CA)</th><th>SAN</th><th>Chain</th>
+                <th>Expires</th><th>Days Left</th><th>Issuer</th><th>SAN</th><th>Chain</th>
             </tr>
     """
 
     for r in results:
         if "error" in r:
-            protocol_icon = "⚪"
+            icon = PROTOCOL_ICONS.get(r.get("protocol"))
             html += f"""
             <tr>
                 <td>{r.get('service')}</td><td>{r['domain']}</td><td>{r.get('port','')}</td>
-                <td style='font-size:1.4em'>{protocol_icon}</td>
+                <td style='font-size:1.4em'>{icon}</td>
                 <td colspan="5" class="error">Errore: {r['error']}</td>
             </tr>"""
         else:
-            if r["days_left"] <= 0: color = "#ff4d4d"
-            elif r.get("alert"): color = "#ffcc00"
-            else: color = "lightgreen"
+            icon = PROTOCOL_ICONS.get(r.get("protocol"))
 
-            proto = r.get("protocol")
-            protocol_icon = {"tls_modern": "🟢", "tls_legacy": "🟠", "ssl_obsolete": "🔴"}.get(proto, "⚪")
+            if r["days_left"] <= 0: color="#ff4d4d"
+            elif r.get("alert"): color="#ffcc00"
+            else: color="lightgreen"
 
-            issuer_preview = r["issuer"][:40] + "..." if len(r["issuer"]) > 40 else r["issuer"]
+            issuer = r["issuer"]
             san_preview = ", ".join(r["san"][:2])
             san_full = ", ".join(r["san"])
-            chain_icon = "<span style='color:orange;font-size:1.4em;font-weight:bold;'>⚠</span>" \
-                if r.get("chain_incomplete") else "<span style='color:lightgreen;font-size:1.4em;font-weight:bold;'>✔</span>"
+            chain_icon = "⚠" if r.get("chain_incomplete") else "✔"
 
             html += f"""
             <tr>
                 <td>{r.get('service')}</td><td>{r['domain']}</td><td>{r['port']}</td>
-                <td style='font-size:1.4em'>{protocol_icon}</td>
+                <td style='font-size:1.4em'>{icon}</td>
                 <td>{r['expires']}</td>
-                <td style="color:{color}; font-weight:bold;">{r['days_left']}</td>
-                <td class='issuer tooltip'>{issuer_preview}<span>{r['issuer']}</span></td>
+                <td style='color:{color}; font-weight:bold;'>{r['days_left']}</td>
+                <td class='issuer tooltip'>{issuer[:40]}...<span>{issuer}</span></td>
                 <td class='san tooltip'>{san_preview}...<span>{san_full}</span></td>
                 <td>{chain_icon}</td>
             </tr>
             """
 
     html += """
-        </table>
-
-        <footer>
-            © 2025 Deda Next – Internal SSL Monitoring Dashboard
-        </footer>
-    </body>
-    </html>
-    """
-
+        </table><footer>© 2025 Deda Next – Internal SSL Monitoring Dashboard</footer></body></html>"""
     return html
 
 
-@app.get("/export", response_class=PlainTextResponse)
-def export_csv():
-    results = check_domains()
-    results = sort_results(results)
-
-    output = io.StringIO()
-    writer = csv.writer(output)
-
-    writer.writerow(["Service", "Domain", "Port", "Protocol", "Expires", "Days Left", "Issuer", "SAN", "Chain/Error"])
-
-    for r in results:
-        if "error" in r:
-            writer.writerow([r.get("service",""), r.get("domain",""), r.get("port",""), "NO TLS", "", "", "", "", f"ERROR: {r['error']}"])
-        else:
-            writer.writerow([
-                r.get("service",""), r.get("domain",""), r.get("port",""),
-                r.get("protocol",""), r.get("expires",""), r.get("days_left",""),
-                r.get("issuer",""), "; ".join(r.get("san", [])), r.get("chain", "")
-            ])
-
-    csv_data = output.getvalue()
-    output.close()
-    return PlainTextResponse(csv_data, media_type="text/csv",
-        headers={"Content-Disposition": 'attachment; filename="ssl_report.csv"'})
-
+# ----------------------------------------------------------------------
+#       EXPORT XLSX (ICON + COLOR)
+# ----------------------------------------------------------------------
 
 @app.get("/export_xlsx")
 def export_xlsx():
-    results = check_domains()
-    results = sort_results(results)
+    results = sort_results(check_domains())
 
     filename = f"ssl_report_{datetime.datetime.now().strftime('%Y-%m-%d')}.xlsx"
     filepath = f"/tmp/{filename}"
@@ -224,43 +177,62 @@ def export_xlsx():
     ws = wb.active
     ws.title = "SSL Report"
 
-    # Legend
-    ws.append([
-        "Legenda:", "🟢 TLS moderno", "🟠 TLS legacy",
-        "🔴 SSL obsoleto", "⚪ Nessun certificato"
-    ])
-    ws.append([])
+    # Freeze header
+    ws.freeze_panes = "A4"
 
+    # Legend
+    ws.append(["Legenda:", "🟢 TLS moderno", "🟠 TLS legacy", "🔴 SSL obsoleto", "⚫ No TLS", "🚫 Rifiutata", "🕓 Timeout"])
+    ws.append([])
     headers = ["Service", "Domain", "Port", "Protocol", "Expires", "Days Left", "Issuer", "SAN", "Chain"]
     ws.append(headers)
 
+    # Style header
+    for cell in ws[3]:
+        cell.fill = PatternFill(start_color="4F81BD", fill_type="solid")
+        cell.font = Font(color="FFFFFF", bold=True)
+        cell.alignment = Alignment(horizontal="center")
+
+    # Data rows
     for r in results:
-        if "error" in r:
-            ws.append([
-                r.get("service",""), r.get("domain",""), r.get("port",""),
-                "NO TLS", "", "", "", "", f"ERROR: {r['error']}"
-            ])
-            continue
+        proto = r.get("protocol")
+        icon = PROTOCOL_ICONS.get(proto)
+        san = "; ".join(r.get("san") or [])
+        chain = r.get("chain", f"ERROR: {r['error']}") if "error" in r else r["chain"]
 
         row = [
             r.get("service",""), r.get("domain",""), r.get("port",""),
-            r.get("protocol",""), r.get("expires",""), r.get("days_left",""),
-            r.get("issuer",""), "; ".join(r.get("san", [])), r.get("chain","")
+            f"{icon}", r.get("expires",""), r.get("days_left",""),
+            r.get("issuer",""), san, chain
         ]
         ws.append(row)
 
-        # color Days Left
-        cell = ws[f"F{ws.max_row}"]
-        days = r.get("days_left")
-
-        if days is not None:
-            if days <= 0:
-                fill = PatternFill(start_color="FF0000", fill_type="solid")
-            elif r.get("alert"):
-                fill = PatternFill(start_color="FFA500", fill_type="solid")
-            else:
-                fill = PatternFill(start_color="00CC00", fill_type="solid")
+        fill = PatternFill(start_color=ROW_COLORS.get(proto), fill_type="solid")
+        for cell in ws[ws.max_row]:
             cell.fill = fill
+            cell.alignment = Alignment(wrap_text=True)
 
     wb.save(filepath)
-    return FileResponse(filepath, filename=filename, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    return FileResponse(filepath, filename=filename,
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+# CSV EXPORT unchanged
+@app.get("/export", response_class=PlainTextResponse)
+def export_csv():
+    results = sort_results(check_domains())
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Service", "Domain", "Port", "Protocol", "Expires", "Days Left", "Issuer", "SAN", "Chain/Error"])
+
+    for r in results:
+        icon = PROTOCOL_ICONS.get(r.get("protocol"))
+        if "error" in r:
+            writer.writerow([r.get("service"), r["domain"], r.get("port"), icon, "", "", "", "", f"ERROR: {r['error']}"])
+        else:
+            writer.writerow([
+                r.get("service"), r["domain"], r["port"], icon,
+                r["expires"], r["days_left"], r["issuer"], "; ".join(r["san"]), r["chain"]
+            ])
+
+    return PlainTextResponse(output.getvalue(), media_type="text/csv",
+            headers={"Content-Disposition": 'attachment; filename="ssl_report.csv"'})
