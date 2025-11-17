@@ -3,61 +3,67 @@ import socket
 from datetime import datetime
 from OpenSSL import crypto
 
-
-# Lista protocolli compatibile ovunque
+# Tentativi compatibili e più aggressivi per sistemi legacy
 PROTOCOL_MATRIX = [
-    ("tls_modern", ssl.PROTOCOL_TLS),       # negozia automaticamente TLS1.2 e TLS1.3
-    ("tls_legacy", ssl.PROTOCOL_TLSv1_1),   # TLS 1.1
-    ("tls_legacy", ssl.PROTOCOL_TLSv1),     # TLS 1.0
-    ("ssl_obsolete", ssl.PROTOCOL_SSLv23),  # fallback obsoleto ma utile
+    ("tls_modern", ssl.PROTOCOL_TLS),          # TLS 1.2 / 1.3 auto
+    ("tls_legacy", ssl.PROTOCOL_TLSv1_1),      # TLS 1.1
+    ("tls_legacy", ssl.PROTOCOL_TLSv1),        # TLS 1.0
+    ("ssl_obsolete", ssl.PROTOCOL_SSLv23),     # handshake permissivo (NON SSLv2/v3 reali)
 ]
 
 
-def try_handshake(host, port, label, protocol, use_sni=True):
+def try_handshake(host, port, label, protocol, use_sni=True, allow_weak=False):
     try:
-        context = ssl.SSLContext(protocol)
+        ctx = ssl.SSLContext(protocol)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
 
-        # Disabilitiamo validazione per evitare errori con CA locali
-        context.verify_mode = ssl.CERT_NONE
-        context.check_hostname = False
+        if allow_weak:
+            try:
+                ctx.set_ciphers("ALL:@SECLEVEL=0")
+            except Exception:
+                pass
 
-        # Creiamo connessione TCP
         conn = socket.create_connection((host, port), timeout=5)
 
-        # Tenta handshake con o senza SNI
         if use_sni:
-            sock = context.wrap_socket(conn, server_hostname=host)
+            sock = ctx.wrap_socket(conn, server_hostname=host)
         else:
-            sock = context.wrap_socket(conn)
+            sock = ctx.wrap_socket(conn)
 
         der = sock.getpeercert(binary_form=True)
         sock.close()
 
-        cert = crypto.load_certificate(crypto.FILETYPE_ASN1, der)
-        return cert, label
+        return crypto.load_certificate(crypto.FILETYPE_ASN1, der), label
 
     except Exception:
         return None, None
 
 
 def detect_protocol(host, port):
-    """Testa handshake con fallback multiplo"""
+
     for label, proto in PROTOCOL_MATRIX:
 
-        # Prima prova con SNI
-        cert, res_label = try_handshake(host, port, label, proto, use_sni=True)
+        # 1️⃣ con SNI
+        cert, lbl = try_handshake(host, port, label, proto, use_sni=True)
         if cert:
-            return cert, res_label
+            return cert, lbl
 
-        # Poi senza SNI
-        cert, res_label = try_handshake(host, port, label, proto, use_sni=False)
+        # 2️⃣ senza SNI (apparati legacy)
+        cert, lbl = try_handshake(host, port, label, proto, use_sni=False)
         if cert:
-            return cert, res_label
+            return cert, lbl
+
+        # 3️⃣ con cipher weak e senza SNI (ultima spiaggia controllata)
+        cert, lbl = try_handshake(host, port, label, proto, use_sni=False, allow_weak=True)
+        if cert:
+            return cert, lbl
 
     return None, "no_tls"
 
 
 def parse_certificate(cert):
+
     try:
         expires = datetime.strptime(cert.get_notAfter().decode(), "%Y%m%d%H%M%SZ")
         days_left = (expires - datetime.utcnow()).days
@@ -80,12 +86,12 @@ def parse_certificate(cert):
             "days_left": days_left,
             "issuer": issuer or "Unknown",
             "san": san_list,
-            "chain": "⚠ missing intermediate / unverified",
+            "chain": "⚠ not validated",
             "chain_incomplete": True
         }
 
     except Exception as e:
-        return {"error": f"Certificate parsing failed: {e}"}
+        return {"error": f"Cannot parse certificate: {e}"}
 
 
 def check_domains(config_path="app/config.json"):
@@ -109,13 +115,12 @@ def check_domains(config_path="app/config.json"):
                 "domain": host,
                 "port": port,
                 "protocol": protocol,
-                "error": "No TLS certificate available" if protocol == "no_tls" else "Handshake failed",
+                "error": "No TLS certificate available",
                 "chain_incomplete": True
             })
             continue
 
         parsed = parse_certificate(cert)
-
         if "error" in parsed:
             results.append({
                 "service": service,
