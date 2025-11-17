@@ -3,31 +3,32 @@ import socket
 from datetime import datetime
 from OpenSSL import crypto
 
-
-def classify_protocol(proto):
-    """Return protocol classification: modern / legacy / obsolete."""
-    if proto in ("TLSv1.3", "TLSv1.2"):
-        return "modern"
-    if proto == "TLSv1.1":
-        return "legacy"
-    return "obsolete"  # TLS1.0, SSLv3, SSLv2, unknown, None
-
-
-def fetch_certificate(host, port):
-    """Fetch certificate WITHOUT strict validation and capture protocol."""
+def fetch_certificate_and_protocol(host, port):
+    """
+    Apre una connessione TLS non validata, ritorna certificato DER e protocollo negoziato.
+    """
     try:
-        conn = socket.create_connection((host, port), timeout=6)
+        # Connessione TCP
+        conn = socket.create_connection((host, port), timeout=5)
+
+        # Contesto senza validazione (accetta anche chain non completa)
         context = ssl._create_unverified_context()
+
+        # Wrap TLS, con SNI
         sock = context.wrap_socket(conn, server_hostname=host)
 
-        # detect protocol used
-        proto = sock.version()  # example: TLSv1.2, TLSv1.3, TLSv1.1, TLSv1, None
-
+        # Ottenimento certificato in formato DER
         der_cert = sock.getpeercert(True)
+
+        # Recupero versione protocollo negoziato
+        negotiated_protocol = sock.version() or "unknown"
+
         sock.close()
 
-        cert = crypto.load_certificate(crypto.FILETYPE_ASN1, der_cert)
-        return cert, proto
+        # Conversione a oggetto X509
+        cert_obj = crypto.load_certificate(crypto.FILETYPE_ASN1, der_cert)
+
+        return cert_obj, negotiated_protocol
 
     except ssl.SSLError as e:
         return f"SSL error: {e}", None
@@ -35,8 +36,8 @@ def fetch_certificate(host, port):
         return f"Connection error: {e}", None
 
 
-def parse_certificate(cert, proto):
-    """Extract information even if chain is incomplete."""
+def parse_certificate(cert):
+    """Estrarre informazioni certificate, assume chain incompleta."""
     try:
         expires = datetime.strptime(cert.get_notAfter().decode(), "%Y%m%d%H%M%SZ")
         days_left = (expires - datetime.utcnow()).days
@@ -47,7 +48,6 @@ def parse_certificate(cert, proto):
             issuer_parts.get(b"CN", b"").decode()
         ]).strip(", ")
 
-        # SAN extraction
         san_list = []
         for i in range(cert.get_extension_count()):
             ext = cert.get_extension(i)
@@ -55,26 +55,17 @@ def parse_certificate(cert, proto):
                 san_list = [entry.strip() for entry in str(ext).split(",")]
                 break
 
-        protocol_level = classify_protocol(proto)
-
         return {
             "expires": expires.strftime("%Y-%m-%d"),
             "days_left": days_left,
             "issuer": issuer if issuer else "Unknown",
             "san": san_list,
             "chain": "⚠️ Incomplete or not provided by server",
-            "chain_incomplete": True,
-            "protocol": proto,
-            "protocol_level": protocol_level,
+            "chain_incomplete": True
         }
 
     except Exception as e:
-        return {
-            "error": f"Parsing error: {e}",
-            "chain_incomplete": True,
-            "protocol": proto,
-            "protocol_level": classify_protocol(proto)
-        }
+        return {"error": f"Parsing error: {e}", "chain_incomplete": True}
 
 
 def check_domains(config_path="app/config.json"):
@@ -91,55 +82,47 @@ def check_domains(config_path="app/config.json"):
         service = entry.get("service_name")
         alert_days = entry.get("alert_days", config.get("notify_before_days", 15))
 
-        cert, proto = fetch_certificate(host, port)
+        cert, proto = fetch_certificate_and_protocol(host, port)
 
-        # Error case (no certificate)
+        # Error check
         if isinstance(cert, str):
             results.append({
                 "service": service,
                 "domain": host,
                 "port": port,
+                "protocol": proto or "unknown",
                 "error": cert,
-                "chain_incomplete": True,
-                "protocol": proto,
-                "protocol_level": classify_protocol(proto),
+                "chain_incomplete": True
             })
             continue
 
-        parsed = parse_certificate(cert, proto)
+        parsed = parse_certificate(cert)
 
+        # Parsing error
         if "error" in parsed:
             results.append({
                 "service": service,
                 "domain": host,
                 "port": port,
+                "protocol": proto or "unknown",
                 "error": parsed["error"],
-                "chain_incomplete": True,
-                "protocol": parsed.get("protocol"),
-                "protocol_level": parsed.get("protocol_level"),
+                "chain_incomplete": True
             })
             continue
 
+        # Success
         results.append({
             "service": service,
             "domain": host,
             "port": port,
+            "protocol": proto,
             "expires": parsed["expires"],
             "days_left": parsed["days_left"],
             "issuer": parsed["issuer"],
             "san": parsed["san"],
             "chain": parsed["chain"],
             "chain_incomplete": parsed["chain_incomplete"],
-            "protocol": parsed["protocol"],
-            "protocol_level": parsed["protocol_level"],
             "alert": parsed["days_left"] <= alert_days
         })
 
-    # Sort by expiration
-    def sort_key(item):
-        if "days_left" not in item:
-            return (999999, item["service"])
-        return (item["days_left"], item["service"])
-
-    results.sort(key=sort_key)
     return results
