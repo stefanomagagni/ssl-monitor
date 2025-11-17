@@ -5,10 +5,11 @@ from OpenSSL import crypto
 
 
 SSL_PROTOCOLS = [
-    ("tls_modern", ssl.PROTOCOL_TLS_CLIENT),  # auto TLS1.2/1.3
-    ("tls_legacy", ssl.PROTOCOL_TLSv1),       # TLS 1.0
-    ("tls_legacy", ssl.PROTOCOL_TLSv1_1),     # TLS 1.1
-    ("ssl_obsolete", ssl.PROTOCOL_TLSv1),     # SSLv3
+    ("tls_modern", ssl.PROTOCOL_TLS_CLIENT),     # TLS1.2 / TLS1.3
+    ("tls_legacy", ssl.PROTOCOL_TLSv1_2),        # TLS1.2 esplicito
+    ("tls_legacy", ssl.PROTOCOL_TLSv1_1),        # TLS1.1
+    ("tls_legacy", ssl.PROTOCOL_TLSv1),          # TLS1.0
+    ("ssl_obsolete", ssl.PROTOCOL_SSLv23),       # SSLv3 / SSL fallback
 ]
 
 
