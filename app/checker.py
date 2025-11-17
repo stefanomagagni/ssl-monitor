@@ -4,143 +4,118 @@ from datetime import datetime
 from OpenSSL import crypto
 
 
-def try_tls(host, port, protocol, timeout=5, use_sni=True):
-    """
-    Esegue handshake con protocollo specifico.
-    protocol può essere:
-      - ssl.PROTOCOL_TLS_CLIENT → moderno
-      - ssl.PROTOCOL_TLSv1      → TLS 1.0 legacy
-    """
-    conn = None
-    sock = None
+# ================================================================
+#  CONFIGURAZIONE FALLBACK HANDSHAKE
+# ================================================================
+
+HANDSHAKE_ATTEMPTS = [
+    ("tls_auto", None),                    # Automatico (TLS1.2/1.3 in genere)
+    ("tls_legacy", ssl.PROTOCOL_TLSv1),    # TLS 1.0
+    ("tls_legacy", ssl.PROTOCOL_TLSv1_1),  # TLS 1.1
+]
+
+# Tentativo SSLv3 SOLO SE supportato dall'interprete
+if hasattr(ssl, "PROTOCOL_SSLv3"):
+    HANDSHAKE_ATTEMPTS.append(("ssl_obsolete", ssl.PROTOCOL_SSLv3))
+
+
+# ================================================================
+#  FUNZIONE BASE DI CONNESSIONE
+# ================================================================
+
+def attempt_handshake(host, port, protocol_name, protocol_version, timeout=6, use_sni=True):
     try:
         conn = socket.create_connection((host, port), timeout=timeout)
+    except socket.timeout:
+        return None, "timeout", "Timeout di connessione"
+    except ConnectionRefusedError:
+        return None, "refused", "Connessione rifiutata"
+    except OSError as e:
+        return None, "refused", f"Errore socket: {e}"
 
-        ctx = ssl.SSLContext(protocol)
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
+    try:
+        if protocol_version is None:
+            ctx = ssl._create_unverified_context()
+        else:
+            ctx = ssl.SSLContext(protocol_version)
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
 
-        # ⚠️ Per TLS 1.0 abbassiamo il security level,
-        # altrimenti molti vecchi server rispondono con "internal error"
-        if protocol == ssl.PROTOCOL_TLSv1:
-            try:
-                ctx.set_ciphers("DEFAULT:@SECLEVEL=0")
-            except Exception:
-                # Se per qualche motivo fallisce, andiamo comunque avanti
-                pass
+        if use_sni:
+            sock = ctx.wrap_socket(conn, server_hostname=host)
+        else:
+            sock = ctx.wrap_socket(conn)
 
-        # SNI solo se richiesto
-        server_name = host if use_sni else None
-        sock = ctx.wrap_socket(conn, server_hostname=server_name)
+        protocol_used = sock.version() or ""
 
-        version = sock.version() or ""  # es: "TLSv1", "TLSv1.2"
-        der = sock.getpeercert(binary_form=True)
+        try:
+            der = sock.getpeercert(binary_form=True)
+        except Exception:
+            sock.close()
+            return None, "no_tls", "Nessun certificato TLS disponibile"
+
         if not der:
-            raise RuntimeError("no_cert")
+            sock.close()
+            return None, "no_tls", "Nessun certificato TLS disponibile"
 
         cert = crypto.load_certificate(crypto.FILETYPE_ASN1, der)
-        return cert, version
+        sock.close()
 
-    finally:
-        try:
-            if sock:
-                sock.close()
-        except:
-            pass
-        try:
-            if conn:
-                conn.close()
-        except:
-            pass
-
-
-def fetch_tls_info(host, port, timeout=5):
-    """
-    1️⃣ Prova TLS moderno (TLS1.2/1.3) con PROTOCOL_TLS_CLIENT
-    2️⃣ Se fallisce, prova TLS1.0 legacy (con SNI e poi senza), con SECLEVEL=0
-    """
-    # ----------------
-    # 1) TENTATIVO MODERNO
-    # ----------------
-    try:
-        cert, version = try_tls(
-            host,
-            port,
-            ssl.PROTOCOL_TLS_CLIENT,
-            timeout=timeout,
-            use_sni=True
-        )
-
-        v = version.lower()
-        if "tlsv1.3" in v or "tlsv1.2" in v:
-            proto = "tls_modern"
-        elif "tlsv1.1" in v or v == "tlsv1":
-            proto = "tls_legacy"
-        elif v.startswith("ssl"):
-            proto = "ssl_obsolete"
+        # Classificazione protocollo reale
+        pl = protocol_used.lower()
+        if "tlsv1.3" in pl or "tlsv1.2" in pl:
+            proto_label = "tls_modern"
+        elif "tlsv1.1" in pl or "tlsv1" == pl:
+            proto_label = "tls_legacy"
+        elif pl.startswith("ssl"):
+            proto_label = "ssl_obsolete"
         else:
-            proto = "unknown"
+            proto_label = "unknown"
 
-        return {"cert": cert, "protocol": proto}, None, None
+        return {"cert": cert, "protocol": proto_label}, None, None
+
+    except ssl.SSLError as e:
+        msg = str(e).lower()
+        if "wrong version" in msg or "unknown protocol" in msg:
+            return None, "tcp_open_not_tls", "Porta aperta ma non parla TLS"
+        return None, "no_tls", f"Errore SSL/TLS: {e}"
 
     except socket.timeout:
         return None, "timeout", "Timeout durante handshake"
-    except ConnectionRefusedError:
-        return None, "refused", "Connessione rifiutata"
-    except Exception as modern_err:
-        last_state = "no_tls"
-        last_err = f"Errore TLS moderno: {modern_err}"
+    except Exception as e:
+        return None, "refused", f"Errore handshake: {e}"
 
-    # ----------------
-    # 2) FALLBACK TLS1.0 LEGACY (con e senza SNI)
-    # ----------------
-    for use_sni in (True, False):
-        try:
-            cert, version = try_tls(
-                host,
-                port,
-                ssl.PROTOCOL_TLSv1,
-                timeout=timeout,
-                use_sni=use_sni
-            )
 
-            v = version.lower()
-            if "tlsv1" in v:
-                proto = "tls_legacy"
-            elif v.startswith("ssl"):
-                proto = "ssl_obsolete"
-            else:
-                proto = "unknown"
+# ================================================================
+#  FALLBACK MANAGER
+# ================================================================
 
-            return {"cert": cert, "protocol": proto}, None, None
+def fetch_tls_info(host, port):
+    # 1️⃣ Tentativi standard (SNI)
+    for proto_name, proto_ver in HANDSHAKE_ATTEMPTS:
+        data, proto_state, err = attempt_handshake(host, port, proto_name, proto_ver)
+        if data:
+            return data, None, None
+        if proto_state not in (None, "no_tls"):
+            last_state, last_err = proto_state, err
 
-        except socket.timeout:
-            last_state = "timeout"
-            last_err = "Timeout durante handshake legacy"
-        except ConnectionRefusedError:
-            last_state = "refused"
-            last_err = "Connessione rifiutata (legacy)"
-        except RuntimeError:
-            last_state = "no_tls"
-            last_err = "Nessun certificato TLS disponibile"
-        except ssl.SSLError as e:
-            last_state = "no_tls"
-            last_err = f"Errore TLS1.0: {e}"
-        except Exception as e:
-            last_state = "no_tls"
-            last_err = f"Errore TLS1.0: {e}"
+    # 2️⃣ Tentativo SENZA SNI
+    data, proto_state, err = attempt_handshake(host, port, "no_sni", None, use_sni=False)
+    if data:
+        data["protocol"] = "tls_legacy"  # Di norma senza SNI = legacy
+        return data, None, None
 
-    # Se siamo qui, tutti i tentativi legacy sono falliti
-    return None, last_state, last_err
+    return None, proto_state or "no_tls", err or "Impossibile stabilire connessione TLS"
 
+
+# ================================================================
+#  PARSING CERTIFICATO
+# ================================================================
 
 def parse_certificate(cert):
     try:
-        expires = datetime.strptime(
-            cert.get_notAfter().decode(), "%Y%m%d%H%M%SZ"
-        )
+        expires = datetime.strptime(cert.get_notAfter().decode(), "%Y%m%d%H%M%SZ")
         days_left = (expires - datetime.utcnow()).days
-
         issuer_parts = dict(cert.get_issuer().get_components())
         issuer = ", ".join([
             issuer_parts.get(b"O", b"").decode(),
@@ -157,18 +132,22 @@ def parse_certificate(cert):
         return {
             "expires": expires.strftime("%Y-%m-%d"),
             "days_left": days_left,
-            "issuer": issuer if issuer else "Unknown",
+            "issuer": issuer or "Unknown",
             "san": san_list,
-            "chain": "⚠ chain non validata",
+            "chain": "⚠ chain non validata (possibili intermediate CA mancanti)",
             "chain_incomplete": True,
         }
-    except Exception as e:
-        return {"error": f"Errore lettura certificato: {e}"}
 
+    except Exception as e:
+        return {"error": f"Errore parsing certificato: {e}"}
+
+
+# ================================================================
+#  MAIN CHECK FUNCTION
+# ================================================================
 
 def check_domains(config_path="app/config.json"):
     import json
-
     with open(config_path) as f:
         config = json.load(f)
 
@@ -180,21 +159,21 @@ def check_domains(config_path="app/config.json"):
         service = entry.get("service_name")
         alert_days = entry.get("alert_days", config.get("notify_before_days", 15))
 
-        data, proto_state, err_msg = fetch_tls_info(host, port)
+        data, proto_state, err = fetch_tls_info(host, port)
 
-        # Errore / nessun certificato / timeout / rifiutata
-        if err_msg is not None:
+        if err:
             results.append({
                 "service": service,
                 "domain": host,
                 "port": port,
                 "protocol": proto_state,
-                "error": err_msg,
+                "error": err,
                 "chain_incomplete": True,
             })
             continue
 
-        parsed = parse_certificate(data["cert"])
+        cert = data["cert"]
+        parsed = parse_certificate(cert)
 
         if "error" in parsed:
             results.append({
@@ -221,7 +200,7 @@ def check_domains(config_path="app/config.json"):
             "alert": parsed["days_left"] <= alert_days,
         })
 
-    # Ordina: prima OK, poi errori
+    # Ordina come richiesto
     def sort_key(r):
         if "error" in r:
             return (1, 999999)
