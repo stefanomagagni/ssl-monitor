@@ -159,3 +159,4 @@ def check_domains(config_path="app/config.json"):
 
     results.sort(key=lambda x: (99999 if "error" in x else x["days_left"]))
     return results
+
