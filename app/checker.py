@@ -3,23 +3,29 @@ import socket
 from datetime import datetime
 from OpenSSL import crypto
 
-# Lista protocolli da testare in ordine
-SSL_PROTOCOLS = [
-    ("tls_modern", ssl.PROTOCOL_TLS_CLIENT),  # Supporta auto TLS1.2/1.3
-    ("tls_legacy", ssl.PROTOCOL_TLSv1),       # TLS 1.0
-    ("tls_legacy", ssl.PROTOCOL_TLSv1_1),     # TLS 1.1
+# Ordered from most secure to least secure
+PROTOCOL_MATRIX = [
+    ("tls_modern", ssl.PROTOCOL_TLSv1_3),
+    ("tls_modern", ssl.PROTOCOL_TLSv1_2),
+    ("tls_legacy", ssl.PROTOCOL_TLSv1_1),
+    ("tls_legacy", ssl.PROTOCOL_TLSv1),
+    ("ssl_obsolete", ssl.PROTOCOL_SSLv23),  # Fallback SSL
 ]
 
 
-def try_handshake(host, port, label, protocol):
-    """Tenta handshake TLS e ritorna certificato + etichetta se riesce."""
+def try_handshake(host, port, label, protocol, use_sni=True):
+    """Attempts handshake and returns cert + protocol label"""
     try:
         context = ssl.SSLContext(protocol)
-        context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
+        context.check_hostname = False
 
         conn = socket.create_connection((host, port), timeout=4)
-        sock = context.wrap_socket(conn, server_hostname=host)
+
+        if use_sni:
+            sock = context.wrap_socket(conn, server_hostname=host)
+        else:
+            sock = context.wrap_socket(conn)
 
         der = sock.getpeercert(binary_form=True)
         sock.close()
@@ -31,29 +37,25 @@ def try_handshake(host, port, label, protocol):
         return None, None
 
 
-def detect_protocol_and_fetch(host, port):
-    """Verifica porta + handshake + certificato con fallback multi-protocollo."""
+def detect_protocol(host, port):
+    """Tests handshake using multiple SSL/TLS versions and SNI fallback"""
 
-    # 1️⃣ Test TCP reachability
-    try:
-        socket.create_connection((host, port), timeout=4).close()
-    except TimeoutError:
-        return None, "timeout"
-    except Exception:
-        return None, "port_closed"
+    for label, proto in PROTOCOL_MATRIX:
 
-    # 2️⃣ Se la porta è aperta, proviamo TLS
-    for label, proto in SSL_PROTOCOLS:
-        cert, proto_label = try_handshake(host, port, label, proto)
+        # 1️⃣ Try normal handshake WITH SNI
+        cert, detected = try_handshake(host, port, label, proto, use_sni=True)
         if cert:
-            return cert, proto_label
+            return cert, detected
 
-    # 3️⃣ Porta risponde ma NON parla TLS → servizio non SSL
+        # 2️⃣ Try handshake WITHOUT SNI (important for internal systems)
+        cert, detected = try_handshake(host, port, label, proto, use_sni=False)
+        if cert:
+            return cert, detected
+
     return None, "no_tls"
 
 
 def parse_certificate(cert):
-    """Estrae metadati certificato anche se la chain è incompleta."""
     try:
         expires = datetime.strptime(cert.get_notAfter().decode(), "%Y%m%d%H%M%SZ")
         days_left = (expires - datetime.utcnow()).days
@@ -79,7 +81,6 @@ def parse_certificate(cert):
             "chain": "⚠ missing intermediate (not validated)",
             "chain_incomplete": True,
         }
-
     except Exception as e:
         return {"error": f"Certificate parsing failed: {e}"}
 
@@ -90,51 +91,43 @@ def check_domains(config_path="app/config.json"):
         config = json.load(f)
 
     results = []
+
     for entry in config["domains"]:
         host = entry.get("url")
         port = entry.get("port", 443)
         service = entry.get("service_name")
         alert_days = entry.get("alert_days", config.get("notify_before_days", 15))
 
-        cert, protocol = detect_protocol_and_fetch(host, port)
+        cert, protocol = detect_protocol(host, port)
 
-        # Stato icone
-        protocol_icon_map = {
-            "tls_modern": "🟢",
-            "tls_legacy": "🟠",
-            "ssl_obsolete": "🔴",
-            "no_tls": "⚫",
-            "port_closed": "🚫",
-            "timeout": "🕓",
-        }
-        icon = protocol_icon_map.get(protocol, "❔")
-
-        # Porta aperta ma NESSUN certificato TLS
         if cert is None:
             results.append({
                 "service": service,
                 "domain": host,
                 "port": port,
-                "protocol": icon,
-                "expires": "N/A",
-                "days_left": 999999,
-                "issuer": "N/A",
-                "san": [],
-                "chain": "N/A",
-                "chain_incomplete": True,
-                "alert": False,
-                "error": "No TLS certificate available" if protocol == "no_tls" else "Connection or handshake failed",
+                "protocol": protocol,
+                "error": "No TLS certificate available" if protocol == "no_tls" else "Handshake failed",
+                "chain_incomplete": True
             })
             continue
 
-        # parsing OK
         parsed = parse_certificate(cert)
+
+        if "error" in parsed:
+            results.append({
+                "service": service,
+                "domain": host,
+                "port": port,
+                "protocol": protocol,
+                "error": parsed["error"],
+            })
+            continue
 
         results.append({
             "service": service,
             "domain": host,
             "port": port,
-            "protocol": icon,
+            "protocol": protocol,
             "expires": parsed["expires"],
             "days_left": parsed["days_left"],
             "issuer": parsed["issuer"],
@@ -144,6 +137,5 @@ def check_domains(config_path="app/config.json"):
             "alert": parsed["days_left"] <= alert_days,
         })
 
-    # sorting: certificati validi prima, poi errori
-    results.sort(key=lambda x: x["days_left"])
+    results.sort(key=lambda x: (99999 if "error" in x else x["days_left"]))
     return results
