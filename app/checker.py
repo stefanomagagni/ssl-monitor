@@ -3,25 +3,28 @@ import socket
 from datetime import datetime
 from OpenSSL import crypto
 
-# Ordered from most secure to least secure
+
+# Lista protocolli compatibile ovunque
 PROTOCOL_MATRIX = [
-    ("tls_modern", ssl.PROTOCOL_TLSv1_3),
-    ("tls_modern", ssl.PROTOCOL_TLSv1_2),
-    ("tls_legacy", ssl.PROTOCOL_TLSv1_1),
-    ("tls_legacy", ssl.PROTOCOL_TLSv1),
-    ("ssl_obsolete", ssl.PROTOCOL_SSLv23),  # Fallback SSL
+    ("tls_modern", ssl.PROTOCOL_TLS),       # negozia automaticamente TLS1.2 e TLS1.3
+    ("tls_legacy", ssl.PROTOCOL_TLSv1_1),   # TLS 1.1
+    ("tls_legacy", ssl.PROTOCOL_TLSv1),     # TLS 1.0
+    ("ssl_obsolete", ssl.PROTOCOL_SSLv23),  # fallback obsoleto ma utile
 ]
 
 
 def try_handshake(host, port, label, protocol, use_sni=True):
-    """Attempts handshake and returns cert + protocol label"""
     try:
         context = ssl.SSLContext(protocol)
+
+        # Disabilitiamo validazione per evitare errori con CA locali
         context.verify_mode = ssl.CERT_NONE
         context.check_hostname = False
 
-        conn = socket.create_connection((host, port), timeout=4)
+        # Creiamo connessione TCP
+        conn = socket.create_connection((host, port), timeout=5)
 
+        # Tenta handshake con o senza SNI
         if use_sni:
             sock = context.wrap_socket(conn, server_hostname=host)
         else:
@@ -38,19 +41,18 @@ def try_handshake(host, port, label, protocol, use_sni=True):
 
 
 def detect_protocol(host, port):
-    """Tests handshake using multiple SSL/TLS versions and SNI fallback"""
-
+    """Testa handshake con fallback multiplo"""
     for label, proto in PROTOCOL_MATRIX:
 
-        # 1️⃣ Try normal handshake WITH SNI
-        cert, detected = try_handshake(host, port, label, proto, use_sni=True)
+        # Prima prova con SNI
+        cert, res_label = try_handshake(host, port, label, proto, use_sni=True)
         if cert:
-            return cert, detected
+            return cert, res_label
 
-        # 2️⃣ Try handshake WITHOUT SNI (important for internal systems)
-        cert, detected = try_handshake(host, port, label, proto, use_sni=False)
+        # Poi senza SNI
+        cert, res_label = try_handshake(host, port, label, proto, use_sni=False)
         if cert:
-            return cert, detected
+            return cert, res_label
 
     return None, "no_tls"
 
@@ -60,10 +62,10 @@ def parse_certificate(cert):
         expires = datetime.strptime(cert.get_notAfter().decode(), "%Y%m%d%H%M%SZ")
         days_left = (expires - datetime.utcnow()).days
 
-        issuer_parts = dict(cert.get_issuer().get_components())
+        issuer_data = dict(cert.get_issuer().get_components())
         issuer = ", ".join([
-            issuer_parts.get(b"O", b"").decode(),
-            issuer_parts.get(b"CN", b"").decode()
+            issuer_data.get(b"O", b"").decode(),
+            issuer_data.get(b"CN", b"").decode()
         ]).strip(", ")
 
         san_list = []
@@ -76,11 +78,12 @@ def parse_certificate(cert):
         return {
             "expires": expires.strftime("%Y-%m-%d"),
             "days_left": days_left,
-            "issuer": issuer if issuer else "Unknown",
+            "issuer": issuer or "Unknown",
             "san": san_list,
-            "chain": "⚠ missing intermediate (not validated)",
-            "chain_incomplete": True,
+            "chain": "⚠ missing intermediate / unverified",
+            "chain_incomplete": True
         }
+
     except Exception as e:
         return {"error": f"Certificate parsing failed: {e}"}
 
@@ -93,7 +96,7 @@ def check_domains(config_path="app/config.json"):
     results = []
 
     for entry in config["domains"]:
-        host = entry.get("url")
+        host = entry["url"]
         port = entry.get("port", 443)
         service = entry.get("service_name")
         alert_days = entry.get("alert_days", config.get("notify_before_days", 15))
@@ -119,7 +122,7 @@ def check_domains(config_path="app/config.json"):
                 "domain": host,
                 "port": port,
                 "protocol": protocol,
-                "error": parsed["error"],
+                "error": parsed["error"]
             })
             continue
 
@@ -134,7 +137,7 @@ def check_domains(config_path="app/config.json"):
             "san": parsed["san"],
             "chain": parsed["chain"],
             "chain_incomplete": parsed["chain_incomplete"],
-            "alert": parsed["days_left"] <= alert_days,
+            "alert": parsed["days_left"] <= alert_days
         })
 
     results.sort(key=lambda x: (99999 if "error" in x else x["days_left"]))
