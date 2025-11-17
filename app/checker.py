@@ -3,54 +3,51 @@ import socket
 from datetime import datetime
 from OpenSSL import crypto
 
+# Order of protocol fallback
+PROTO_FALLBACK = [
+    ("TLS 1.3", ssl.PROTOCOL_TLS_CLIENT),
+    ("TLS 1.2", ssl.PROTOCOL_TLSv1_2),
+    ("TLS 1.1", ssl.PROTOCOL_TLSv1_1),
+    ("TLS 1.0", ssl.PROTOCOL_TLSv1),
+    ("SSL 3.0", ssl.PROTOCOL_SSLv3) if hasattr(ssl, "PROTOCOL_SSLv3") else None,
+]
 
-def fetch_certificate(host, port):
-    """
-    Fetch certificate WITHOUT validation.
-    Uses SECLEVEL=0 to allow legacy servers (Actalis, vecchi Java, TLS1.0/1.1).
-    """
-    try:
-        conn = socket.create_connection((host, port), timeout=7)
+# Remove Nones if SSLv3 is not available
+PROTO_FALLBACK = [p for p in PROTO_FALLBACK if p is not None]
 
-        # Context permissivo per server legacy
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
 
-        # Supporto per ciphers legacy (fondamentale)
+def try_handshake(host, port):
+    """Attempt connection using fallback protocols, returning protocol used + certificate"""
+    for label, proto in PROTO_FALLBACK:
         try:
-            context.set_ciphers("ALL:@SECLEVEL=0")
+            context = ssl.SSLContext(proto)
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+
+            with socket.create_connection((host, port), timeout=5) as conn:
+                with context.wrap_socket(conn, server_hostname=host) as sock:
+                    der = sock.getpeercert(True)
+                    cert = crypto.load_certificate(crypto.FILETYPE_ASN1, der)
+                    return cert, label  # SUCCESS!
+
         except Exception:
-            pass
+            continue
 
-        sock = context.wrap_socket(conn, server_hostname=host)
-        der_cert = sock.getpeercert(True)
-        sock.close()
-
-        # Converte DER → X509
-        return crypto.load_certificate(crypto.FILETYPE_ASN1, der_cert)
-
-    except ssl.SSLError as e:
-        return f"SSL error: {e}"
-    except Exception as e:
-        return f"Connection error: {e}"
+    return None, None  # NO PROTOCOL WORKED
 
 
-def parse_certificate(cert):
-    """Extract data even if certificate chain is incomplete."""
+def parse_certificate(cert, protocol_label):
     try:
-        # Expiration date
         expires = datetime.strptime(cert.get_notAfter().decode(), "%Y%m%d%H%M%SZ")
         days_left = (expires - datetime.utcnow()).days
 
-        # Issuer
         issuer_parts = dict(cert.get_issuer().get_components())
-        issuer = ", ".join([
+        issuer = ", ".join(filter(None, [
             issuer_parts.get(b"O", b"").decode(),
             issuer_parts.get(b"CN", b"").decode()
-        ]).strip(", ")
+        ]))
 
-        # SAN
+        # Parse SAN
         san_list = []
         for i in range(cert.get_extension_count()):
             ext = cert.get_extension(i)
@@ -58,25 +55,34 @@ def parse_certificate(cert):
                 san_list = [entry.strip() for entry in str(ext).split(",")]
                 break
 
+        chain_status = "⚠️ Incomplete or not provided by server"
+
+        # risk level based on protocol
+        risk_map = {
+            "TLS 1.3": "low",
+            "TLS 1.2": "low",
+            "TLS 1.1": "medium",
+            "TLS 1.0": "medium",
+            "SSL 3.0": "high"
+        }
+
         return {
             "expires": expires.strftime("%Y-%m-%d"),
             "days_left": days_left,
             "issuer": issuer if issuer else "Unknown",
             "san": san_list,
-            "chain": "⚠️ Incomplete or not provided by server",
-            "chain_incomplete": True
+            "chain": chain_status,
+            "chain_incomplete": True,
+            "protocol": protocol_label,
+            "risk_level": risk_map.get(protocol_label, "unknown")
         }
 
     except Exception as e:
-        return {
-            "error": f"Parsing error: {e}",
-            "chain_incomplete": True
-        }
+        return {"error": f"Parsing error: {e}", "chain_incomplete": True}
 
 
 def check_domains(config_path="app/config.json"):
     import json
-
     with open(config_path) as f:
         config = json.load(f)
 
@@ -88,22 +94,20 @@ def check_domains(config_path="app/config.json"):
         service = entry.get("service_name")
         alert_days = entry.get("alert_days", config.get("notify_before_days", 15))
 
-        cert = fetch_certificate(host, port)
+        cert, protocol_label = try_handshake(host, port)
 
-        # ERROR CASE
-        if isinstance(cert, str):
+        if cert is None:
             results.append({
                 "service": service,
                 "domain": host,
                 "port": port,
-                "error": cert,
+                "error": "Handshake failed on all protocols",
                 "chain_incomplete": True
             })
             continue
 
-        parsed = parse_certificate(cert)
+        parsed = parse_certificate(cert, protocol_label)
 
-        # PARSE ERROR CASE
         if "error" in parsed:
             results.append({
                 "service": service,
@@ -114,7 +118,6 @@ def check_domains(config_path="app/config.json"):
             })
             continue
 
-        # SUCCESS CASE
         results.append({
             "service": service,
             "domain": host,
@@ -125,15 +128,17 @@ def check_domains(config_path="app/config.json"):
             "san": parsed["san"],
             "chain": parsed["chain"],
             "chain_incomplete": parsed["chain_incomplete"],
-            "alert": parsed["days_left"] <= alert_days
+            "alert": parsed["days_left"] <= alert_days,
+            "protocol": parsed["protocol"],
+            "risk_level": parsed["risk_level"]
         })
 
-    # SORT BY EXPIRY DATE (errori in fondo)
+    # Sort by expiry date
     def sort_key(item):
         if "error" in item:
             return (99999, item["service"])
         return (item["days_left"], item["service"])
 
     results.sort(key=sort_key)
-
     return results
+
