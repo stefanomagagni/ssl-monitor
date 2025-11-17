@@ -5,52 +5,66 @@ from OpenSSL import crypto
 
 
 def detect_protocol(sock):
-    """Restituisce categoria protocollo in base alla versione negoziata."""
-    version = sock.version()  # es: 'TLSv1.2', 'TLSv1.3', 'SSLv3', None
+    version = sock.version()  # Example: 'TLSv1.3', 'TLSv1.2', 'SSLv3', None
 
-    if version is None:
+    if not version:
         return "no_ssl"
 
     version = version.lower()
 
     if "tlsv1.3" in version or "tlsv1.2" in version:
         return "tls_modern"
-    elif "tlsv1.1" in version or "tlsv1" in version:
+    elif "tlsv1.1" in version or version == "tlsv1":
         return "tls_legacy"
     elif "ssl" in version:
         return "ssl_obsolete"
-    else:
-        return "unknown"
+    return "unknown"
+
+
+def try_handshake(host, port, tls_versions):
+    """Attempts handshake using provided TLS context versions list."""
+    for ver_name, tls_ctx in tls_versions:
+        try:
+            conn = socket.create_connection((host, port), timeout=8)
+            sock = tls_ctx.wrap_socket(conn, server_hostname=host)
+
+            protocol = detect_protocol(sock)
+
+            try:
+                der = sock.getpeercert(True)
+                cert = crypto.load_certificate(crypto.FILETYPE_ASN1, der)
+                sock.close()
+                return {"cert": cert, "protocol": protocol}
+            except:
+                sock.close()
+                return {"error": "Peer connected but no certificate sent", "protocol": protocol}
+
+        except Exception:
+            continue
+
+    return {"error": "Handshake failed on all supported protocols", "protocol": "no_ssl"}
 
 
 def fetch_certificate(host, port):
-    """Fetch certificate WITHOUT validation, and detect protocol."""
+    """Attempts handshake with fallback for TLS/SSL variations."""
+    # Modern and legacy fallback order
+    tls_attempts = [
+        ("TLS_auto", ssl._create_unverified_context()),
+        ("TLSv1", ssl.SSLContext(ssl.PROTOCOL_TLSv1)),
+        ("TLSv1.1", ssl.SSLContext(ssl.PROTOCOL_TLSv1_1)),
+        ("TLSv1.2", ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)),
+    ]
+
+    # Optional SSLv3 fallback if available
     try:
-        conn = socket.create_connection((host, port), timeout=5)
-        context = ssl._create_unverified_context()
-        sock = context.wrap_socket(conn, server_hostname=host)
+        tls_attempts.append(("SSLv3", ssl.SSLContext(ssl.PROTOCOL_SSLv3)))
+    except Exception:
+        pass
 
-        protocol = detect_protocol(sock)
-
-        try:
-            der_cert = sock.getpeercert(True)
-            cert = crypto.load_certificate(crypto.FILETYPE_ASN1, der_cert)
-        except Exception:
-            sock.close()
-            return {"error": "No peer certificate provided", "protocol": protocol}
-
-        sock.close()
-
-        return {"cert": cert, "protocol": protocol}
-
-    except ssl.SSLError as e:
-        return {"error": f"SSL error: {e}", "protocol": "ssl_obsolete"}
-    except Exception as e:
-        return {"error": f"Connection error: {e}", "protocol": "no_ssl"}
+    return try_handshake(host, port, tls_attempts)
 
 
 def parse_certificate(cert):
-    """Extract fields even if chain is incomplete."""
     try:
         expires = datetime.strptime(cert.get_notAfter().decode(), "%Y%m%d%H%M%SZ")
         days_left = (expires - datetime.utcnow()).days
@@ -65,17 +79,15 @@ def parse_certificate(cert):
         for i in range(cert.get_extension_count()):
             ext = cert.get_extension(i)
             if ext.get_short_name() == b"subjectAltName":
-                san_list = [entry.strip() for entry in str(ext).split(",")]
+                san_list = [s.strip() for s in str(ext).split(",")]
                 break
-
-        chain_status = "⚠️ Incomplete or not provided by server"
 
         return {
             "expires": expires.strftime("%Y-%m-%d"),
             "days_left": days_left,
             "issuer": issuer if issuer else "Unknown",
             "san": san_list,
-            "chain": chain_status,
+            "chain": "⚠️ Incomplete or not provided by server",
             "chain_incomplete": True
         }
 
@@ -98,7 +110,6 @@ def check_domains(config_path="app/config.json"):
         alert_days = entry.get("alert_days", config.get("notify_before_days", 15))
 
         data = fetch_certificate(host, port)
-
         protocol = data.get("protocol", "unknown")
 
         if "error" in data:
@@ -139,12 +150,5 @@ def check_domains(config_path="app/config.json"):
             "alert": parsed["days_left"] <= alert_days
         })
 
-    # sort by expiration
-    def sort_key(item):
-        if "error" in item:
-            return (99999, item["service"])
-        return (item["days_left"], item["service"])
-
-    results.sort(key=sort_key)
-
+    results.sort(key=lambda x: (99999 if "error" in x else x["days_left"], x["service"]))
     return results
