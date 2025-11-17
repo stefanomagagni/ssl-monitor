@@ -185,6 +185,7 @@ def dashboard():
                 <th>Days Left</th>
                 <th>Issuer (CA)</th>
                 <th>SAN</th>
+                <th>Protocol</th>
                 <th>Chain</th>
             </tr>
     """
@@ -196,28 +197,38 @@ def dashboard():
                 <td>{r.get('service','')}</td>
                 <td>{r['domain']}</td>
                 <td>{r.get('port','')}</td>
-                <td colspan="5" class="error">Errore: {r['error']}</td>
+                <td colspan="6" class="error">Errore: {r['error']}</td>
             </tr>"""
         else:
-            # Colore semaforo: rosso / giallo / verde
+            # Semaforo scadenza
             if r["days_left"] <= 0:
-                color = "#ff4d4d"          # scaduto
+                color = "#ff4d4d"
             elif r.get("alert"):
-                color = "#ffcc00"          # in alert
+                color = "#ffcc00"
             else:
-                color = "lightgreen"       # ok
+                color = "lightgreen"
 
             issuer_preview = r["issuer"][:40] + "..." if len(r["issuer"]) > 40 else r["issuer"]
-
             san_preview = ", ".join(r["san"][:2])
             san_full = ", ".join(r["san"])
 
-            # Chain: se abbiamo chain_incomplete True → ⚠, altrimenti ✔
+            # Protocol icon mapping
+            proto = r.get("protocol", "Unknown")
+            level = r.get("protocol_level", "obsolete")
+
+            if level == "modern":
+                proto_icon = f"<span class='tooltip'>🔵<span>Protocollo moderno<br>{proto}</span></span>"
+            elif level == "legacy":
+                proto_icon = f"<span class='tooltip'>🟡<span>Protocollo legacy<br>{proto}</span></span>"
+            else:
+                proto_icon = f"<span class='tooltip'>🔴<span>Protocollo obsoleto o handshake non sicuro<br>{proto}</span></span>"
+
+            # Chain icon
             if r.get("chain_incomplete"):
                 chain_icon = (
                     "<span class='chain-warning tooltip'>⚠"
                     "<span>La chain del certificato potrebbe essere incompleta "
-                    "(es. manca la CA intermedia), o non è stata validata completamente.</span>"
+                    "(manca CA intermedia o non fornita dal server).</span>"
                     "</span>"
                 )
             else:
@@ -230,17 +241,15 @@ def dashboard():
                 <td>{r['port']}</td>
                 <td>{r['expires']}</td>
                 <td style="color:{color}; font-weight:bold;">{r['days_left']}</td>
-
                 <td class='issuer tooltip'>
                     {issuer_preview}
                     <span>{r['issuer']}</span>
                 </td>
-
                 <td class='san tooltip'>
                     {san_preview}...
                     <span>{san_full}</span>
                 </td>
-
+                <td>{proto_icon}</td>
                 <td>{chain_icon}</td>
             </tr>
             """
@@ -267,7 +276,7 @@ def export_csv():
     output = io.StringIO()
     writer = csv.writer(output)
 
-    writer.writerow(["Service", "Domain", "Port", "Expires", "Days Left", "Issuer", "SAN", "Chain / Error"])
+    writer.writerow(["Service", "Domain", "Port", "Expires", "Days Left", "Issuer", "SAN", "Protocol", "Chain / Error"])
 
     for r in results:
         if "error" in r:
@@ -275,6 +284,7 @@ def export_csv():
                 r.get("service", ""),
                 r.get("domain", ""),
                 r.get("port", ""),
+                "",
                 "",
                 "",
                 "",
@@ -290,6 +300,7 @@ def export_csv():
                 r.get("days_left", ""),
                 r.get("issuer", ""),
                 "; ".join(r.get("san", [])),
+                r.get("protocol", ""),
                 r.get("chain", ""),
             ])
 
@@ -299,5 +310,5 @@ def export_csv():
     return PlainTextResponse(
         csv_data,
         media_type="text/csv",
-        headers={"Content-Disposition": 'attachment; filename="ssl_report.csv"'}
+        headers={"Content-Disposition": 'attachment; filename=\"ssl_report.csv\"'}
     )
