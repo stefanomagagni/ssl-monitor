@@ -20,11 +20,20 @@ def try_tls(host, port, protocol, timeout=5, use_sni=True):
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
 
+        # ⚠️ Per TLS 1.0 abbassiamo il security level,
+        # altrimenti molti vecchi server rispondono con "internal error"
+        if protocol == ssl.PROTOCOL_TLSv1:
+            try:
+                ctx.set_ciphers("DEFAULT:@SECLEVEL=0")
+            except Exception:
+                # Se per qualche motivo fallisce, andiamo comunque avanti
+                pass
+
         # SNI solo se richiesto
         server_name = host if use_sni else None
         sock = ctx.wrap_socket(conn, server_hostname=server_name)
 
-        version = sock.version() or ""
+        version = sock.version() or ""  # es: "TLSv1", "TLSv1.2"
         der = sock.getpeercert(binary_form=True)
         if not der:
             raise RuntimeError("no_cert")
@@ -47,15 +56,20 @@ def try_tls(host, port, protocol, timeout=5, use_sni=True):
 
 def fetch_tls_info(host, port, timeout=5):
     """
-    1️⃣ TLS moderno (TLS1.2/1.3)
-    2️⃣ Legacy TLS1.0 con SNI
-    3️⃣ Legacy TLS1.0 senza SNI
+    1️⃣ Prova TLS moderno (TLS1.2/1.3) con PROTOCOL_TLS_CLIENT
+    2️⃣ Se fallisce, prova TLS1.0 legacy (con SNI e poi senza), con SECLEVEL=0
     """
     # ----------------
     # 1) TENTATIVO MODERNO
     # ----------------
     try:
-        cert, version = try_tls(host, port, ssl.PROTOCOL_TLS_CLIENT, timeout=timeout, use_sni=True)
+        cert, version = try_tls(
+            host,
+            port,
+            ssl.PROTOCOL_TLS_CLIENT,
+            timeout=timeout,
+            use_sni=True
+        )
 
         v = version.lower()
         if "tlsv1.3" in v or "tlsv1.2" in v:
@@ -74,14 +88,21 @@ def fetch_tls_info(host, port, timeout=5):
     except ConnectionRefusedError:
         return None, "refused", "Connessione rifiutata"
     except Exception as modern_err:
-        last_err = str(modern_err)
+        last_state = "no_tls"
+        last_err = f"Errore TLS moderno: {modern_err}"
 
     # ----------------
-    # 2) FALLBACK LEGACY TLS1.0 con SNI
+    # 2) FALLBACK TLS1.0 LEGACY (con e senza SNI)
     # ----------------
     for use_sni in (True, False):
         try:
-            cert, version = try_tls(host, port, ssl.PROTOCOL_TLSv1, timeout=timeout, use_sni=use_sni)
+            cert, version = try_tls(
+                host,
+                port,
+                ssl.PROTOCOL_TLSv1,
+                timeout=timeout,
+                use_sni=use_sni
+            )
 
             v = version.lower()
             if "tlsv1" in v:
@@ -95,17 +116,21 @@ def fetch_tls_info(host, port, timeout=5):
 
         except socket.timeout:
             last_state = "timeout"
-            last_err = "Timeout handshake legacy"
+            last_err = "Timeout durante handshake legacy"
         except ConnectionRefusedError:
             last_state = "refused"
             last_err = "Connessione rifiutata (legacy)"
         except RuntimeError:
             last_state = "no_tls"
             last_err = "Nessun certificato TLS disponibile"
+        except ssl.SSLError as e:
+            last_state = "no_tls"
+            last_err = f"Errore TLS1.0: {e}"
         except Exception as e:
             last_state = "no_tls"
             last_err = f"Errore TLS1.0: {e}"
 
+    # Se siamo qui, tutti i tentativi legacy sono falliti
     return None, last_state, last_err
 
 
@@ -132,7 +157,7 @@ def parse_certificate(cert):
         return {
             "expires": expires.strftime("%Y-%m-%d"),
             "days_left": days_left,
-            "issuer": issuer,
+            "issuer": issuer if issuer else "Unknown",
             "san": san_list,
             "chain": "⚠ chain non validata",
             "chain_incomplete": True,
@@ -155,20 +180,22 @@ def check_domains(config_path="app/config.json"):
         service = entry.get("service_name")
         alert_days = entry.get("alert_days", config.get("notify_before_days", 15))
 
-        data, proto, err = fetch_tls_info(host, port)
+        data, proto_state, err_msg = fetch_tls_info(host, port)
 
-        if err:
+        # Errore / nessun certificato / timeout / rifiutata
+        if err_msg is not None:
             results.append({
                 "service": service,
                 "domain": host,
                 "port": port,
-                "protocol": proto,
-                "error": err,
+                "protocol": proto_state,
+                "error": err_msg,
                 "chain_incomplete": True,
             })
             continue
 
         parsed = parse_certificate(data["cert"])
+
         if "error" in parsed:
             results.append({
                 "service": service,
@@ -190,9 +217,15 @@ def check_domains(config_path="app/config.json"):
             "issuer": parsed["issuer"],
             "san": parsed["san"],
             "chain": parsed["chain"],
-            "chain_incomplete": True,
+            "chain_incomplete": parsed["chain_incomplete"],
             "alert": parsed["days_left"] <= alert_days,
         })
 
-    results.sort(key=lambda r: (1, 999999) if "error" in r else (0, r["days_left"]))
+    # Ordina: prima OK, poi errori
+    def sort_key(r):
+        if "error" in r:
+            return (1, 999999)
+        return (0, r.get("days_left", 999999))
+
+    results.sort(key=sort_key)
     return results
