@@ -66,9 +66,17 @@ def dashboard():
                 cursor: pointer;
                 font-size: 0.95em;
             }
-
             .actions button:hover {
                 background-color: #12589a;
+            }
+
+            .legend {
+                margin-top: 10px;
+                background-color: rgba(0,0,0,0.55);
+                display: inline-block;
+                padding: 10px 22px;
+                border-radius: 8px;
+                font-size: 0.92em;
             }
 
             table {
@@ -102,32 +110,6 @@ def dashboard():
                 color: #ff8080;
                 font-weight: bold;
                 text-align: center;
-            }
-
-            .issuer {
-                font-size: 0.85em;
-                color: #e0e0e0;
-                max-width: 250px;
-                word-wrap: break-word;
-            }
-
-            .san {
-                font-size: 0.75em;
-                color: #ccc;
-                max-width: 250px;
-                word-wrap: break-word;
-            }
-
-            .chain-warning {
-                color: orange;
-                font-weight: bold;
-                font-size: 1.3em;
-            }
-
-            .chain-ok {
-                color: lightgreen;
-                font-size: 1.3em;
-                font-weight: bold;
             }
 
             .tooltip {
@@ -174,6 +156,14 @@ def dashboard():
             <div class="actions">
                 <button onclick="window.location.href='/export'">Esporta CSV</button>
             </div>
+            <div class="legend">
+                <b>Legenda:</b> &nbsp;
+                🔵 Moderno (TLS ≥1.2) &nbsp; | &nbsp;
+                🟡 Legacy (TLS 1.0 / 1.1) &nbsp; | &nbsp;
+                🔴 Obsoleto / errore &nbsp; | &nbsp;
+                ✔ Chain OK &nbsp; | &nbsp;
+                ⚠ Chain incompleta
+            </div>
         </header>
 
         <table>
@@ -181,26 +171,37 @@ def dashboard():
                 <th>Service</th>
                 <th>Domain/IP</th>
                 <th>Port</th>
+                <th>Protocol</th>
                 <th>Expires</th>
                 <th>Days Left</th>
                 <th>Issuer (CA)</th>
                 <th>SAN</th>
-                <th>Protocol</th>
                 <th>Chain</th>
             </tr>
     """
 
     for r in results:
         if "error" in r:
+            protocol_icon = "🔴"
             html += f"""
             <tr>
                 <td>{r.get('service','')}</td>
                 <td>{r['domain']}</td>
                 <td>{r.get('port','')}</td>
-                <td colspan="6" class="error">Errore: {r['error']}</td>
+                <td>{protocol_icon}</td>
+                <td colspan="5" class="error">Errore: {r['error']}</td>
             </tr>"""
         else:
-            # Semaforo scadenza
+            # Protocol icon
+            proto = r.get("protocol", "unknown")
+            if proto in ("TLSv1.3", "TLSv1.2"):
+                protocol_icon = "🔵"
+            elif proto in ("TLSv1.1", "TLSv1.0"):
+                protocol_icon = "🟡"
+            else:
+                protocol_icon = "🔴"
+
+            # Semaforo colore date
             if r["days_left"] <= 0:
                 color = "#ff4d4d"
             elif r.get("alert"):
@@ -212,44 +213,18 @@ def dashboard():
             san_preview = ", ".join(r["san"][:2])
             san_full = ", ".join(r["san"])
 
-            # Protocol icon mapping
-            proto = r.get("protocol", "Unknown")
-            level = r.get("protocol_level", "obsolete")
-
-            if level == "modern":
-                proto_icon = f"<span class='tooltip'>🔵<span>Protocollo moderno<br>{proto}</span></span>"
-            elif level == "legacy":
-                proto_icon = f"<span class='tooltip'>🟡<span>Protocollo legacy<br>{proto}</span></span>"
-            else:
-                proto_icon = f"<span class='tooltip'>🔴<span>Protocollo obsoleto o handshake non sicuro<br>{proto}</span></span>"
-
-            # Chain icon
-            if r.get("chain_incomplete"):
-                chain_icon = (
-                    "<span class='chain-warning tooltip'>⚠"
-                    "<span>La chain del certificato potrebbe essere incompleta "
-                    "(manca CA intermedia o non fornita dal server).</span>"
-                    "</span>"
-                )
-            else:
-                chain_icon = "<span class='chain-ok'>✔</span>"
+            chain_icon = "⚠" if r.get("chain_incomplete") else "✔"
 
             html += f"""
             <tr>
                 <td>{r.get('service','')}</td>
                 <td>{r['domain']}</td>
                 <td>{r['port']}</td>
+                <td>{protocol_icon}</td>
                 <td>{r['expires']}</td>
                 <td style="color:{color}; font-weight:bold;">{r['days_left']}</td>
-                <td class='issuer tooltip'>
-                    {issuer_preview}
-                    <span>{r['issuer']}</span>
-                </td>
-                <td class='san tooltip'>
-                    {san_preview}...
-                    <span>{san_full}</span>
-                </td>
-                <td>{proto_icon}</td>
+                <td class='tooltip'>{issuer_preview}<span>{r['issuer']}</span></td>
+                <td class='tooltip'>{san_preview}...<span>{san_full}</span></td>
                 <td>{chain_icon}</td>
             </tr>
             """
@@ -269,39 +244,21 @@ def dashboard():
 
 @app.get("/export", response_class=PlainTextResponse)
 def export_csv():
-    """Esporta lo stato corrente in CSV."""
     results = check_domains()
     results = sort_results(results)
 
     output = io.StringIO()
     writer = csv.writer(output)
-
-    writer.writerow(["Service", "Domain", "Port", "Expires", "Days Left", "Issuer", "SAN", "Protocol", "Chain / Error"])
+    writer.writerow(["Service", "Domain", "Port", "Protocol", "Expires", "Days Left", "Issuer", "SAN", "Chain / Error"])
 
     for r in results:
         if "error" in r:
-            writer.writerow([
-                r.get("service", ""),
-                r.get("domain", ""),
-                r.get("port", ""),
-                "",
-                "",
-                "",
-                "",
-                "",
-                f"ERROR: {r['error']}",
-            ])
+            writer.writerow([r.get("service",""), r.get("domain",""), r.get("port",""), "", "", "", "", "", f"ERROR: {r['error']}"])
         else:
             writer.writerow([
-                r.get("service", ""),
-                r.get("domain", ""),
-                r.get("port", ""),
-                r.get("expires", ""),
-                r.get("days_left", ""),
-                r.get("issuer", ""),
-                "; ".join(r.get("san", [])),
-                r.get("protocol", ""),
-                r.get("chain", ""),
+                r.get("service",""), r.get("domain",""), r.get("port",""), r.get("protocol",""),
+                r.get("expires",""), r.get("days_left",""), r.get("issuer",""),
+                "; ".join(r.get("san", [])), r.get("chain","")
             ])
 
     csv_data = output.getvalue()
