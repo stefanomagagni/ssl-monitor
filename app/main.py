@@ -70,48 +70,7 @@ def dashboard():
                 background-color: #12589a;
             }
 
-            .legend {
-                margin-top: 10px;
-                background-color: rgba(0,0,0,0.55);
-                display: inline-block;
-                padding: 10px 22px;
-                border-radius: 8px;
-                font-size: 0.92em;
-            }
-
-            table {
-                width: 94%;
-                margin: 20px auto 40px auto;
-                border-collapse: collapse;
-                background-color: rgba(0, 0, 0, 0.7);
-                border-radius: 12px;
-                overflow: hidden;
-                box-shadow: 0 5px 18px rgba(0,0,0,0.55);
-            }
-
-            th {
-                background-color: rgba(255,255,255,0.18);
-                padding: 14px;
-                font-size: 1.05em;
-            }
-
-            td {
-                padding: 12px;
-            }
-
-            tr:nth-child(even) {
-                background-color: rgba(255,255,255,0.08);
-            }
-            tr:hover {
-                background-color: rgba(255,255,255,0.18);
-            }
-
-            .error {
-                color: #ff8080;
-                font-weight: bold;
-                text-align: center;
-            }
-
+            /* Tooltip */
             .tooltip {
                 position: relative;
                 cursor: help;
@@ -125,7 +84,7 @@ def dashboard():
                 border-radius: 5px;
                 position: absolute;
                 z-index: 1;
-                width: 280px;
+                width: 260px;
                 left: 50%;
                 transform: translateX(-50%);
                 bottom: 130%;
@@ -137,15 +96,66 @@ def dashboard():
                 opacity: 1;
             }
 
-            footer {
-                background-color: rgba(0,0,0,0.65);
-                padding: 10px;
-                position: fixed;
-                bottom: 0;
-                width: 100%;
-                color: #ccc;
-                font-size: 0.9em;
+            /* Tabella */
+            table {
+                width: 94%;
+                margin: 10px auto 40px auto;
+                border-collapse: collapse;
+                background-color: rgba(0, 0, 0, 0.7);
+                border-radius: 12px;
+                overflow: hidden;
+                box-shadow: 0 5px 18px rgba(0,0,0,0.55);
             }
+            th {
+                background-color: rgba(255,255,255,0.18);
+                padding: 14px;
+                font-size: 1.05em;
+            }
+            td {
+                padding: 12px;
+            }
+            tr:nth-child(even) {
+                background-color: rgba(255,255,255,0.08);
+            }
+            tr:hover {
+                background-color: rgba(255,255,255,0.18);
+            }
+
+            .error {
+                color: #ff8080;
+                font-weight: bold;
+                text-align: center;
+            }
+
+            .issuer {
+                font-size: 0.85em;
+                color: #e0e0e0;
+                max-width: 250px;
+                word-wrap: break-word;
+            }
+
+            .san {
+                font-size: 0.75em;
+                color: #ccc;
+                max-width: 250px;
+                word-wrap: break-word;
+            }
+
+            /* Legenda */
+            .legend-container {
+                margin-top: 5px;
+                margin-bottom: 10px;
+                background: rgba(0,0,0,0.55);
+                display: inline-block;
+                padding: 8px 18px;
+                border-radius: 10px;
+                font-size: 1.05em;
+            }
+            .legend-item {
+                margin: 0 14px;
+                display: inline-block;
+            }
+
         </style>
     </head>
 
@@ -156,15 +166,15 @@ def dashboard():
             <div class="actions">
                 <button onclick="window.location.href='/export'">Esporta CSV</button>
             </div>
-            <div class="legend">
-                <b>Legenda:</b> &nbsp;
-                🔵 Moderno (TLS ≥1.2) &nbsp; | &nbsp;
-                🟡 Legacy (TLS 1.0 / 1.1) &nbsp; | &nbsp;
-                🔴 Obsoleto / errore &nbsp; | &nbsp;
-                ✔ Chain OK &nbsp; | &nbsp;
-                ⚠ Chain incompleta
-            </div>
         </header>
+
+        <!-- 🔵 LEGGENDA -->
+        <div class="legend-container">
+            <span class="legend-item tooltip">🟢 TLS moderno<span>Supporta TLS1.2 / TLS1.3</span></span>
+            <span class="legend-item tooltip">🟠 TLS legacy<span>Protocollo TLS debole o datato</span></span>
+            <span class="legend-item tooltip">🔴 SSL obsoleto<span>SSlv2/3 non sicuro o fuori standard</span></span>
+            <span class="legend-item tooltip">⚪ Nessun certificato<span>Connessione non SSL/TLS</span></span>
+        </div>
 
         <table>
             <tr>
@@ -182,26 +192,17 @@ def dashboard():
 
     for r in results:
         if "error" in r:
-            protocol_icon = "🔴"
+            protocol_icon = "⚪"
             html += f"""
             <tr>
-                <td>{r.get('service','')}</td>
+                <td>{r.get('service')}</td>
                 <td>{r['domain']}</td>
                 <td>{r.get('port','')}</td>
-                <td>{protocol_icon}</td>
+                <td style='font-size:1.4em'>{protocol_icon}</td>
                 <td colspan="5" class="error">Errore: {r['error']}</td>
             </tr>"""
         else:
-            # Protocol icon
-            proto = r.get("protocol", "unknown")
-            if proto in ("TLSv1.3", "TLSv1.2"):
-                protocol_icon = "🔵"
-            elif proto in ("TLSv1.1", "TLSv1.0"):
-                protocol_icon = "🟡"
-            else:
-                protocol_icon = "🔴"
-
-            # Semaforo colore date
+            # semaforo
             if r["days_left"] <= 0:
                 color = "#ff4d4d"
             elif r.get("alert"):
@@ -209,22 +210,46 @@ def dashboard():
             else:
                 color = "lightgreen"
 
+            # protocol icon
+            proto = r.get("protocol", "unknown")
+            if proto == "tls_modern":
+                protocol_icon = "🟢"
+            elif proto == "tls_legacy":
+                protocol_icon = "🟠"
+            elif proto == "ssl_obsolete":
+                protocol_icon = "🔴"
+            else:
+                protocol_icon = "⚪"
+
             issuer_preview = r["issuer"][:40] + "..." if len(r["issuer"]) > 40 else r["issuer"]
             san_preview = ", ".join(r["san"][:2])
             san_full = ", ".join(r["san"])
 
-            chain_icon = "⚠" if r.get("chain_incomplete") else "✔"
+            # chain icon
+            if r.get("chain_incomplete"):
+                chain_icon = "<span style='color:orange;font-size:1.4em;font-weight:bold;'>⚠</span>"
+            else:
+                chain_icon = "<span style='color:lightgreen;font-size:1.4em;font-weight:bold;'>✔</span>"
 
             html += f"""
             <tr>
-                <td>{r.get('service','')}</td>
+                <td>{r.get('service')}</td>
                 <td>{r['domain']}</td>
                 <td>{r['port']}</td>
-                <td>{protocol_icon}</td>
+                <td style='font-size:1.4em'>{protocol_icon}</td>
                 <td>{r['expires']}</td>
                 <td style="color:{color}; font-weight:bold;">{r['days_left']}</td>
-                <td class='tooltip'>{issuer_preview}<span>{r['issuer']}</span></td>
-                <td class='tooltip'>{san_preview}...<span>{san_full}</span></td>
+
+                <td class='issuer tooltip'>
+                    {issuer_preview}
+                    <span>{r['issuer']}</span>
+                </td>
+
+                <td class='san tooltip'>
+                    {san_preview}...
+                    <span>{san_full}</span>
+                </td>
+
                 <td>{chain_icon}</td>
             </tr>
             """
@@ -249,16 +274,26 @@ def export_csv():
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Service", "Domain", "Port", "Protocol", "Expires", "Days Left", "Issuer", "SAN", "Chain / Error"])
+
+    writer.writerow(["Service", "Domain", "Port", "Protocol", "Expires", "Days Left", "Issuer", "SAN", "Chain/Error"])
 
     for r in results:
         if "error" in r:
-            writer.writerow([r.get("service",""), r.get("domain",""), r.get("port",""), "", "", "", "", "", f"ERROR: {r['error']}"])
+            writer.writerow([
+                r.get("service",""), r.get("domain",""), r.get("port",""),
+                "NO TLS", "", "", "", "", f"ERROR: {r['error']}"
+            ])
         else:
             writer.writerow([
-                r.get("service",""), r.get("domain",""), r.get("port",""), r.get("protocol",""),
-                r.get("expires",""), r.get("days_left",""), r.get("issuer",""),
-                "; ".join(r.get("san", [])), r.get("chain","")
+                r.get("service",""),
+                r.get("domain",""),
+                r.get("port",""),
+                r.get("protocol",""),
+                r.get("expires",""),
+                r.get("days_left",""),
+                r.get("issuer",""),
+                "; ".join(r.get("san", [])),
+                r.get("chain", "")
             ])
 
     csv_data = output.getvalue()
