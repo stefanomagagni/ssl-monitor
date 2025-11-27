@@ -32,10 +32,11 @@
     },
     {
       "url": "liveintegrator.asl13.it",
-      "port": 22001
+      "port": 22001,
       "service_name": "fseini",
       "alert_days": 40
-    },
+    }
+  ],
   "notify_before_days": 40,
   "notification": {
     "method": "email",
