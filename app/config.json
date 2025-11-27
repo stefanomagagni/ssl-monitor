@@ -10,7 +10,7 @@
       "url": "liveintegrator.asl13.it",
       "port": 32500,
       "service_name": "amco",
-      "alert_days": 40
+      "alert_days": 500
     },
     {
       "url": "meuiweb.asl.novara.it",
