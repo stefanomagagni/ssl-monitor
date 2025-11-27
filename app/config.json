@@ -45,7 +45,7 @@
       "smtp_server": "relay.asl.novara.it",
       "smtp_port": 25,
       "use_tls": false,
-      "from": "ssl-monitor@dedagroup.it",
+      "from": "ssl-monitor@asl.novara.it",
       "to": [
         "stefano.magagni@dedagroup.it",
         "luca.freisa@dedagroup.it",
