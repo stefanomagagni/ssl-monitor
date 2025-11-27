@@ -6,11 +6,18 @@ import datetime
 
 LAST_SENT_FILE = "/tmp/ssl_monitor_last_sent.txt"  # file per gestire invio giornaliero
 
+# 📢 LISTA PERSONE DA "MENZIONARE" PER NOTIFICA TEAMS
+TEAMS_MENTIONS = [
+    "stefano.magagni@dedagroup.it",
+    "luca.freisa@dedagroup.it",
+    "stefano.ravetto@dedagroup.it"
+]
+
 def notify(results, config_path="app/config.json"):
     with open(config_path) as f:
         conf = json.load(f)
 
-    email_conf = conf.get("email", {})
+    email_conf = conf.get("notification", {}).get("email", {})
     if not email_conf.get("enabled", False):
         print("ℹ️  Email notifications are disabled.")
         return
@@ -35,19 +42,25 @@ def notify(results, config_path="app/config.json"):
             print("📧 Email già inviata oggi, salto l'invio.")
             return
 
-    # 💄 Crea corpo HTML
-    html_body = """
+    # 🟦 CREA STRINGA MENZIONI TEAMS
+    mention_text = " ".join([f"@{m}" for m in TEAMS_MENTIONS])
+
+    # 📨 SUBJECT CON MENZIONI
+    msg_subject = f"⚠️ Avviso scadenza certificati SSL {mention_text}"
+
+    # 💄 CORPO HTML
+    html_body = f"""
     <html>
     <head>
     <style>
-        body { font-family: Arial, sans-serif; }
-        h2 { color: #d9534f; }
-        table { border-collapse: collapse; width: 100%; margin-top: 10px; }
-        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-        th { background-color: #f2f2f2; }
-        tr:nth-child(even){background-color: #f9f9f9;}
-        .danger { color: red; font-weight: bold; }
-        .ok { color: green; }
+        body {{ font-family: Arial, sans-serif; }}
+        h2 {{ color: #d9534f; }}
+        table {{ border-collapse: collapse; width: 100%; margin-top: 10px; }}
+        th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+        th {{ background-color: #f2f2f2; }}
+        tr:nth-child(even){{background-color: #f9f9f9;}}
+        .danger {{ color: red; font-weight: bold; }}
+        .ok {{ color: green; }}
     </style>
     </head>
     <body>
@@ -62,15 +75,21 @@ def notify(results, config_path="app/config.json"):
         color_class = "danger" if r["days_left"] <= 15 else "ok"
         html_body += f"<tr><td>{clean_domain}</td><td>{r['expires']}</td><td class='{color_class}'>{r['days_left']}</td></tr>"
 
-    html_body += """
+    html_body += f"""
         </table>
+
+        <p style="margin-top:20px;">
+        🔔 Notifica Teams automatica inviata ai seguenti utenti:<br>
+        {"<br>".join([f"@{m}" for m in TEAMS_MENTIONS])}
+        </p>
+
         <p style="margin-top:20px;">Email generata automaticamente da <b>SSL Monitor</b>.</p>
     </body>
     </html>
     """
 
     msg = MIMEText(html_body, "html")
-    msg["Subject"] = "⚠️ Avviso scadenza certificati SSL"
+    msg["Subject"] = msg_subject
     msg["From"] = sender
     msg["To"] = ", ".join(recipients)
 
@@ -79,8 +98,11 @@ def notify(results, config_path="app/config.json"):
             if use_tls:
                 server.starttls()
             server.sendmail(sender, recipients, msg.as_string())
+
         with open(LAST_SENT_FILE, "w") as f:
             f.write(today)
-        print("✅ Email HTML inviata con successo!")
+
+        print("✅ Email HTML inviata con successo! (Teams notificherà i tag)")
+
     except Exception as e:
         print(f"❌ Errore nell'invio dell'email: {e}")
