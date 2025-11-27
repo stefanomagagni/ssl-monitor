@@ -46,7 +46,11 @@
       "smtp_port": 25,
       "use_tls": false,
       "from": "ssl-monitor@dedagroup.it",
-      "to": ["stefano.magagni@dedagroup.it"]
+      "to": [
+        "stefano.magagni@dedagroup.it",
+        "luca.freisa@dedagroup.it",
+        "stefano.ravetto@dedagroup.it"
+      ]
     }
   }
 }
