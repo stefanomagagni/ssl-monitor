@@ -42,7 +42,7 @@
     "method": "email",
     "email": {
       "enabled": true,
-      "smtp_server": "smtp1.nco.inet",
+      "smtp_server": "relay.asl.novara.it",
       "smtp_port": 25,
       "use_tls": false,
       "from": "ssl-monitor@dedagroup.it",
